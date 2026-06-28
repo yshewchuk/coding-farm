@@ -98,8 +98,9 @@ The [`Makefile`](Makefile) documents the full sequence. Highlights:
 make bootstrap         # print the end-to-end checklist
 make logto-checklist   # Logto OIDC configuration steps
 make fly               # create + secret + deploy the API (idempotent; loads .env)
+./scripts/deploy.sh web   # deploy the frontend as a static-host Fly app (nginx)
 # (the old fly-app / fly-secrets / fly-deploy targets are deprecated aliases)
-# Deploy frontend/ to any static host; set VITE_* env vars at build time.
+# Prefer your own static host? `./scripts/deploy.sh frontend` builds dist/ for anywhere.
 ```
 
 ## Testing

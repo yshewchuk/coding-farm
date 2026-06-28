@@ -362,6 +362,43 @@ frontend_build() {
 }
 
 # -----------------------------------------------------------------------------
+# Step 5: deploy the frontend as a static-host Fly app (nginx + SPA fallback)
+# -----------------------------------------------------------------------------
+# The UI is a stateless static bundle served by its own Fly app (default
+# cloudsandbox-web), separate from the Management API. The Vite env (VITE_*,
+# including VITE_API_BASE pointing at the API app) is baked into the bundle at
+# build time via fly deploy --build-arg, so no secrets are needed at runtime.
+web_deploy() {
+  section "Deploy frontend static host to Fly.io"
+  need_cmd fly
+  require_env LOGTO_APP_ID "the Logto SPA application id (run 'scripts/deploy.sh logto-setup' first)"
+  local web_app="${FLY_WEB_APP:-cloudsandbox-web}"
+  local api_url="${1:-https://${FLY_APP:-cloudsandbox-api}.fly.dev}"
+
+  # Create the web app if it doesn't exist (idempotent).
+  if ! fly apps list --json 2>/dev/null | jq -e --arg a "$web_app" \
+      '.[] | select((.Name // .name) == $a)' >/dev/null; then
+    fly apps create "$web_app" --org "$FLY_ORG" >/dev/null
+    ok "created Fly app '$web_app'"
+  else
+    ok "Fly app '$web_app' already exists"
+  fi
+
+  # Build + deploy remotely on Fly's builder. VITE_* are baked into the bundle
+  # at build time; the runtime container needs no secrets.
+  fly deploy "$ROOT" --config "$ROOT/frontend/fly.toml" --app "$web_app" --remote-only \
+    --build-arg "VITE_API_BASE=$api_url" \
+    --build-arg "VITE_LOGTO_ENDPOINT=$LOGTO_ISSUER" \
+    --build-arg "VITE_LOGTO_APP_ID=$LOGTO_APP_ID" \
+    --build-arg "VITE_LOGTO_RESOURCE=$LOGTO_AUDIENCE"
+
+  local web_url="https://$web_app.fly.dev"
+  ok "Frontend static host: $web_url"
+  warn "point your custom domain / FRONTEND_URL ($FRONTEND_URL) at $web_url, and add $web_url (+ $FRONTEND_URL) as a Logto redirect origin."
+  echo "$web_url"
+}
+
+# -----------------------------------------------------------------------------
 # CLI
 # -----------------------------------------------------------------------------
 usage() {
@@ -369,13 +406,14 @@ usage() {
 Usage: scripts/deploy.sh <command>
 
 Commands:
-  all             Run neon (optional) -> logto -> fly -> frontend (default)
+  all             Run neon (optional) -> logto -> fly -> web (default)
   preflight       Check required env vars + tools
   neon-create     Create a Neon project with neonctl (sets DATABASE_URL)
   logto           Print the one-time Logto M2M seed checklist
   logto-setup     Create/update the Logto SPA app + API resource (sets LOGTO_APP_ID)
   fly             Create/secret/deploy the Management API app on Fly.io
-  frontend        Build the React bundle with env baked in
+  web             Deploy the frontend as a static-host Fly app (nginx + SPA)
+  frontend        Build the React bundle locally to frontend/dist/ (host anywhere)
   help            Show this help
 
 Env (via environment or a .env file at repo root):
@@ -386,7 +424,8 @@ Env (via environment or a .env file at repo root):
             logged-in session and still set as a runtime secret.
   Seed (once, for logto-setup): LOGTO_M2M_APP_ID, LOGTO_M2M_APP_SECRET
   Auto-set by logto-setup: LOGTO_APP_ID
-  Optional: FLY_APP (default cloudsandbox-api), NEON_REGION, NEON_PROJECT_NAME,
+  Optional: FLY_APP (default cloudsandbox-api), FLY_WEB_APP (default
+            cloudsandbox-web), NEON_REGION, NEON_PROJECT_NAME,
             LOGTO_SPA_APP_NAME (default "Cloud Sandbox"), ENV_FILE
 
 The script is idempotent: each step guards its precondition, so 'all' can be
@@ -408,15 +447,16 @@ case "$cmd" in
       logto_checklist
     fi
     api_url="$(fly_deploy)"
-    frontend_build "$api_url"
+    web_deploy "$api_url"
     section "Done"
-    ok "Next: deploy frontend/dist/ to a static host at $FRONTEND_URL, then sign in."
+    ok "Sign in at https://${FLY_WEB_APP:-cloudsandbox-web}.fly.dev (or your FRONTEND_URL)."
     ;;
   preflight)    preflight ;;
   neon-create)  neon_create ;;
   logto)        load_env; require_env LOGTO_ISSUER; require_env FRONTEND_URL; require_env LOGTO_AUDIENCE; logto_checklist ;;
   logto-setup)  load_env; logto_setup ;;
   fly)          preflight; fly_deploy ;;
+  web)          preflight; web_deploy ;;
   frontend)     preflight; frontend_build ;;
   help|-h|--help) usage ;;
   *) err "unknown command: $cmd"; usage; exit 1 ;;

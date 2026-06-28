@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1
+#
+# Static host for the Cloud Sandbox Management UI.
+#
+# Multi-stage: build the Vite bundle with the VITE_* env baked in, then serve it
+# from nginx with an SPA fallback (the UI uses react-router BrowserRouter, so
+# unknown paths must fall through to index.html). The Management API is a
+# *separate* Fly app on a different origin; the browser talks to it via
+# VITE_API_BASE, so this container serves only static assets (no /api proxy).
+#
+# Deployed as its own Fly app (default name: cloudsandbox-web) by
+# scripts/deploy.sh web. Build context is the repo root.
+
+ARG NODE_VERSION=20
+
+# ---- Build stage -----------------------------------------------------------
+FROM node:${NODE_VERSION}-bookworm AS builder
+WORKDIR /src
+
+# Cache deps first.
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci
+
+COPY frontend/ .
+
+# Vite env is baked into the bundle at build time (import.meta.env). Passed as
+# --build-arg by scripts/deploy.sh web.
+ARG VITE_API_BASE
+ARG VITE_LOGTO_ENDPOINT
+ARG VITE_LOGTO_APP_ID
+ARG VITE_LOGTO_RESOURCE
+ARG VITE_LOGTO_SCOPES=openid profile email
+ENV VITE_API_BASE=${VITE_API_BASE} \
+    VITE_LOGTO_ENDPOINT=${VITE_LOGTO_ENDPOINT} \
+    VITE_LOGTO_APP_ID=${VITE_LOGTO_APP_ID} \
+    VITE_LOGTO_RESOURCE=${VITE_LOGTO_RESOURCE} \
+    VITE_LOGTO_SCOPES=${VITE_LOGTO_SCOPES}
+
+RUN npm run build
+
+# ---- Runtime stage (nginx static server) -----------------------------------
+FROM nginx:1.27-alpine
+
+# Fly's http_service.internal_port expects 8080.
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+# Replace the default site config so ours is the only server block.
+RUN rm -f /etc/nginx/conf.d/default.conf.bak
+COPY --from=builder /src/dist /usr/share/nginx/html
+
+EXPOSE 8080
