@@ -1,248 +1,218 @@
-# Agent Integration Specification (`agents.md`)
+# Agent & IDE Integration (`agents.md`)
 
-This document is the technical specification for AI agent integration in `<Project Name>`. It covers the **agent harness architecture**, how **workspaces** are built to support agents, and how to **extend the platform** to support new AI models or coding assistants.
+This document describes how **workspaces** host developers and AI coding agents
+in Cloud Sandbox, and how the platform exposes them.
 
-It is intended for harness authors, agent vendors, and contributors to the Workspace Daemon. For the broader platform architecture, see `CONTRIBUTING.md`.
+> **Direction note:** This project pivoted from an earlier design built around
+> an in-container **Workspace Daemon** and a pluggable **agent harness
+> abstraction** (the original content of this file). The shipped MVP is leaner:
+> a workspace is a Fly Firecracker microVM running an open-source web IDE
+> (`code-server`), and both humans and AI agents operate *inside* it. The
+> earlier daemon/harness architecture is preserved verbatim-ish in
+> [Future evolution](#future-evolution) so the thinking is not lost, but it is
+> **not** implemented today. Do not write code that assumes a daemon or a
+> harness interface exists.
+
+For the broader platform architecture, see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); for build/test commands, see
+[`AGENTS.md`](AGENTS.md).
 
 ---
 
 ## Table of Contents
 - [Goals & Principles](#goals--principles)
 - [Concepts](#concepts)
-- [Agent Harness Architecture](#agent-harness-architecture)
-- [How Workspaces Support Agents](#how-workspaces-support-agents)
-- [Harness Lifecycle](#harness-lifecycle)
-- [The Harness Interface](#the-harness-interface)
-- [State & Session Communication](#state--session-communication)
-- [Extending with a New Harness](#extending-with-a-new-harness)
-- [Integrating New AI Models / Assistants](#integrating-new-ai-models--assistants)
-- [Bundled Harnesses](#bundled-harnesses)
-- [Stability & Versioning](#stability--versioning)
+- [The Shipped Model: IDE-as-Workspace](#the-shipped-model-ide-as-workspace)
+- [How Agents Use a Workspace](#how-agents-use-a-workspace)
+- [Workspace Lifecycle & Scale-to-Zero](#workspace-lifecycle--scale-to-zero)
+- [Security Boundary](#security-boundary)
+- [Extending the IDE Experience](#extending-the-ide-experience)
+- [Future Evolution](#future-evolution)
 
 ---
 
 ## Goals & Principles
-- **Agent-first, not human-first.** The platform assumes the primary actor in a workspace may be an AI coding agent. Ergonomics, APIs, and lifecycle are designed around that.
-- **Vendor neutrality.** No AI model, vendor, or editor is privileged by the core. All integrations are harnesses that conform to the same interface.
-- **Diverse harnesses.** From headless CLI agents to fully integrated editor experiences (e.g. Visual Studio), all are first-class.
-- **Pluggability without forking.** A new harness must be addable without modifying the control plane or the Workspace Daemon core.
-- **Reproducible execution.** A workspace + harness + model spec must produce a deterministic starting state; runtime nondeterminism from the model is expected, but the environment must not be.
+- **Self-hosted first.** Everything runs on infrastructure the operator
+  controls (Fly.io compute, Neon data, Logto identity). No mandatory SaaS.
+- **Disposable workspaces.** A workspace is ephemeral compute + a persistent
+  volume; it can be destroyed and recreated from configuration alone.
+- **Vendor neutrality for identity and data.** Logto and Neon are swappable;
+  the Management API talks plain Postgres and validates JWTs against any OIDC
+  JWKS endpoint.
+- **Agent-friendly, not agent-coupled.** The platform hosts an editor and a
+  shell; it does not assume any specific AI agent, model, or vendor. Agents are
+  just processes running inside the workspace.
+- **Scale-to-zero by default.** Idle workspaces suspend and wake on demand, so
+  long-running agent or developer sessions cost nothing when paused.
 
 ---
 
 ## Concepts
-- **Agent** — an AI coding assistant that operates inside a workspace (e.g. an LLM-backed coding agent, a CLI assistant, an editor-embedded assistant).
-- **Agent Harness** — the integration that knows how to start, drive, and observe a specific agent. A harness is the adapter between the platform and an agent.
-- **Workspace** — an ephemeral, reproducible containerized environment that may span multiple repositories and hosts one or more harnesses.
-- **Workspace Daemon** — the in-container process that supervises harnesses and bridges them to the control plane.
-- **Session** — a durable conversation/execution context between a user (human or automation) and an agent within a workspace. Sessions survive workspace recreation.
-- **Control Plane / API Layer** — the central service that manages workspace lifecycle and routes state/session traffic.
+- **Workspace** — a single Fly Firecracker microVM booting a template image,
+  with an NVMe Fly Volume mounted at `/workspace`. One workspace == one Fly App
+  (so it gets a unique scale-to-zero URL).
+- **Template** — a version-controlled Dockerfile that, once built, produces an
+  image workspace machines boot from. Templates are owned by an organization.
+- **Session** — the durable record of a workspace: its status, Fly resource
+  ids, and public URL. (In the MVP a session maps 1:1 to a running or suspended
+  workspace; the database row survives machine destruction.)
+- **Management API** — the Go control plane. It is the sole authorization
+  gatekeeper: it validates Logto JWTs, enforces org ownership, and drives the
+  Fly Machines/Apps REST API.
+- **IDE** — the open-source `code-server` (VS Code in the browser), the
+  workspace's primary user-facing surface. Humans and AI agents both interact
+  through the editor and the shell it exposes.
 
 ---
 
-## Agent Harness Architecture
+## The Shipped Model: IDE-as-Workspace
 
-A harness is a discrete module that conforms to a stable interface and runs *inside* the workspace, supervised by the Workspace Daemon. The control plane never speaks directly to an agent — it always goes through the daemon, which delegates to the harness. This indirection is what keeps the platform vendor-neutral and keeps agents portable across infrastructure.
+A workspace is, from the outside, a URL serving a web IDE:
 
 ```
-            ┌──────────────────────────────────────────────┐
-            │               Control Plane (API Layer)        │
-            └──────────────────────┬─────────────────────────┘
-                                   │ control channel (outbound from workspace)
-            ┌──────────────────────▼─────────────────────────┐
-            │              Workspace Daemon                   │
-            │  (supervises harnesses, reports state, hooks)   │
-            └──────┬───────────────┬───────────────┬───────────┘
-                   │               │               │
-        ┌──────────▼───┐   ┌───────▼──────┐   ┌────▼────────────┐
-        │ Harness: CLI  │   │ Harness: VS  │   │ Harness: Custom │
-        │ Agent        │   │ Code/VS      │   │ (3rd-party)     │
-        └──────┬───────┘   └──────┬───────┘   └────┬────────────┘
-               │                  │                │
-        ┌──────▼─────┐     ┌──────▼──────┐   ┌────▼──────────┐
-        │  Agent proc │     │ Editor ext  │   │ Your agent     │
-        │  (model API)│     │ + agent     │   │ implementation  │
-        └─────────────┘     └─────────────┘   └─────────────────┘
+Browser / Agent ──HTTPS+WS──▶ Fly Proxy ──▶ :8080 ──▶ code-server ──▶ /workspace (NVMe volume)
+                                          (autostop=suspend, autostart=true)
 ```
 
-Key properties:
-- The **daemon** is harness-agnostic. It loads harnesses by name and supervises whatever process/extension they spawn.
-- A **harness** owns all knowledge of its agent: how to launch it, how to feed it context, how to observe its actions, and how to translate platform concepts (workspace, session, file edits, terminal commands) into agent-native terms.
-- The **control plane** only knows workspace IDs, session IDs, and harness names. It does not know about models, vendors, or editor protocols.
+- **Compute:** a Firecracker microVM created by the Management API via the Fly
+  Machines REST API, booting the template's image.
+- **Persistence:** an NVMe **Fly Volume** provisioned per session and mounted
+  at `/workspace`. The root filesystem is ephemeral; only `/workspace` survives
+  suspend/recreate.
+- **Networking:** the Fly Proxy terminates TLS and passes WebSockets through to
+  `code-server` on port 8080. The workspace requires no inbound configuration
+  beyond the `services` array the Management API sets at creation time.
+- **Scale-to-zero:** the `services[0]` entry is configured with
+  `autostop="suspend"` and `autostart=true`. When all HTTP/WS connections drop,
+  the machine suspends (volume retained); the next request to the workspace URL
+  wakes it.
 
-### Harness responsibilities
-1. **Launch** — start the agent process/extension within the workspace with the resolved environment.
-2. **Context binding** — expose the workspace's repositories, environment, and tooling to the agent in the agent's native format.
-3. **Session management** — create/resume agent sessions and persist session state via the daemon so it survives workspace recreation.
-4. **Action observation** — report agent actions (file edits, command runs, lifecycle events) back through the daemon to the control plane, so the web interface and audit logs can surface them.
-5. **Health & telemetry** — report process health and resource usage to the daemon.
-6. **Graceful shutdown** — respond to suspend/destroy signals by flushing session state and exiting cleanly.
-
----
-
-## How Workspaces Support Agents
-
-Workspaces are the substrate agents run on. Their design is driven by agent requirements:
-
-### Multi-repository by default
-A workspace aggregates multiple repositories into one working tree with shared environment and tooling. Agents receive a unified view of the code, which is essential for cross-repo refactors and coordinated multi-service changes. The repository list is part of the workspace spec and is initialized deterministically by **Repository Synchronization** — agents never perform ad-hoc `git clone`s.
-
-### Ephemeral and reproducible
-Workspaces are disposable. Because agent session state is externalized (via the daemon to the control plane), a workspace can be destroyed and recreated without losing the conversation. An agent resuming a recreated workspace should see the same repositories, same session history, and same resolved configuration as before destruction.
-
-### Templated configuration
-The **Workspace Templating Engine** merges an organization template with developer preferences to produce the resolved spec. For agents, this means a consistent baseline of tooling, secrets, and model access policy across all workspaces, while still allowing per-developer or per-task customization within a vetted subset.
-
-### Deterministic initialization
-Repo sync + templating together guarantee that two workspaces created from the same spec start from byte-identical state (modulo time and externally-fetched resources the spec declares as nondeterministic). This makes agent behavior reproducible and debuggable.
-
-### Outbound-only networking
-The daemon dials out to the control plane. Agents running inside the workspace do not require inbound connectivity from the platform, which keeps workspaces deployable behind NAT/firewalls and across diverse self-hosted infrastructure.
+The reference image (`docker/Dockerfile.codeserver-workspace`) ships Ubuntu +
+Go + `code-server`, running as a non-root `dev` user, with `code-server`
+binding `0.0.0.0:8080` and serving `/workspace` as its root folder.
 
 ---
 
-## Harness Lifecycle
+## How Agents Use a Workspace
 
-A harness is driven through a small state machine, mediated by the daemon:
+There is no agent-specific protocol in the MVP. An AI coding agent is simply a
+process inside the workspace, same as a human developer:
 
-1. **Resolve** — templating + repo sync produce the workspace spec, including the chosen harness and its configuration.
-2. **Provision** — the workspace container is created and the daemon starts.
-3. **Load** — the daemon loads the named harness (bundled or registered third-party).
-4. **Initialize** — the harness binds workspace context (repos, env, session) and prepares the agent.
-5. **Run** — the agent is active; the harness observes actions and reports state through the daemon.
-6. **Suspend** — on a suspend signal, the harness flushes session state and the daemon snapshots durable state; the container may be stopped.
-7. **Resume** — a new container is created from the same spec; the daemon reloads the harness, which restores the session from externalized state.
-8. **Destroy** — the harness performs final flush, the daemon finalizes session state, and the container is torn down. Session state may be retained per retention policy.
+1. **Connect** to the workspace URL (a human opens it in a browser; an agent or
+   automation can drive the editor or open a terminal/SSH session as configured
+   by the template image).
+2. **Work** inside `/workspace`, which is the persistent volume. Anything an
+   agent writes there survives hibernation and machine recreation.
+3. **Use the template's tooling.** The Dockerfile determines what's installed
+   (languages, CLIs, model client tools). An operator extends a template to
+   pre-install a specific agent's runtime — this is configuration, not platform
+   code.
+4. **Hibernate / resume.** The Management API exposes resume and hibernate; the
+   Fly Proxy wakes a suspended workspace on demand. Agent state that lives in
+   `/workspace` persists; agent state in the ephemeral rootfs does not.
 
-Sessions are decoupled from container lifetime. This is the core mechanism that makes "cattle, not pets" compatible with long-running agent conversations.
-
----
-
-## The Harness Interface
-
-All harnesses conform to a single interface. The concrete language bindings live in `daemon/harness/`; conceptually the interface is:
-
-```text
-Harness {
-  # Metadata
-  name() -> HarnessId
-  apiVersion() -> SemVer            # harness interface version this targets
-
-  # Lifecycle
-  initialize(WorkspaceContext) -> Result
-  run(SessionHandle) -> Result
-  suspend(SessionHandle) -> Result
-  resume(SessionHandle) -> Result
-  destroy(SessionHandle) -> Result
-
-  # Observation (called by the daemon)
-  onEvent(event: AgentEvent) -> void
-
-  # Capability declaration
-  capabilities() -> set<Capability> # e.g. { EDIT_FILES, RUN_COMMANDS, READ_REPOS, MULTI_REPO }
-}
-```
-
-`WorkspaceContext` carries everything a harness needs to bind an agent to a workspace:
-- Resolved repository paths (multi-repo).
-- Resolved environment variables and secrets (via the templating engine's secret policy).
-- The selected harness configuration.
-- The session handle for state continuity.
-
-`AgentEvent` is the common event shape the harness emits to report agent activity (file edits, commands, lifecycle transitions, errors, custom metadata). The control plane forwards these to the web interface, where UI plugins can render harness-specific detail.
-
-**Capability declaration** is important: a harness declares what its agent can do (edit files, run commands, read multiple repos, etc.). The control plane and UI use capabilities to decide what actions to expose and what to render. A read-only analysis agent, for example, would not declare `EDIT_FILES`.
+Because the platform is agent-agnostic, adding a new AI assistant today means
+baking its runtime into a template Dockerfile — no Management API or UI changes
+required.
 
 ---
 
-## State & Session Communication
+## Workspace Lifecycle & Scale-to-Zero
 
-Session and state traffic flows:
+Driven by the Management API (`internal/service/orchestrator.go`):
 
-```
-Agent -> Harness -> Daemon -> API Layer -> Web Interface (UI plugin)
-```
+1. **Create** — validate the template is ready and belongs to the caller's org;
+   ensure a dedicated Fly App; provision an NVMe volume; create the machine
+   (image + mount + scale-to-zero `services`); record resource ids + URL.
+2. **Running** — the workspace serves `code-server` at its Fly URL.
+3. **Hibernate** — `StopMachine`; status → `suspended`. The Fly Proxy keeps the
+   URL; the volume is retained.
+4. **Resume** — `StartMachine`, or simply hit the URL (Fly Proxy autostarts the
+   suspended machine). Status → `running`.
+5. **Delete** — destroy the machine, destroy the volume, remove the session row.
 
-- **Session state** (conversation, agent-internal memory) is owned by the harness but persisted via the daemon to control-plane storage. The daemon provides a key/value session store keyed by session ID; harnesses define their own value schema.
-- **Live events** flow in real time over the control channel so the UI can stream agent activity.
-- **Commands inbound to the agent** (e.g. a user sending a message, or automation triggering a task) flow the opposite direction through the same channel.
-
-Because all of this is outbound from the workspace and abstracted behind the harness interface, swapping the underlying AI model or assistant does not change the control plane or the UI — only the harness.
-
----
-
-## Extending with a New Harness
-
-To add support for a new AI coding assistant:
-
-1. **Choose a distribution model.**
-   - **Bundled:** contribute the harness under `harnesses/<name>` and it ships with the platform. Recommended for widely-used agents.
-   - **Out-of-tree:** distribute the harness as a standalone module that registers against the same harness interface. Recommended for proprietary or niche agents.
-
-2. **Implement the harness interface** (see above) against the harness API version documented in `daemon/harness/`.
-
-3. **Declare capabilities.** Only declare what your agent actually supports. The platform uses these to gate UI actions and control-plane features.
-
-4. **Handle session state.** Persist session state through the daemon's session store so suspend/resume works across workspace recreation. Do not store session state only inside the container.
-
-5. **Emit `AgentEvent`s** for any action the platform or UI should observe (file edits, commands, errors, lifecycle). Custom metadata can be attached for harness-specific UI plugins to render.
-
-6. **Add a UI plugin** (optional, under `web/plugins/` or out-of-tree via the SDK) if your harness needs custom front-end rendering. The dashboard renders standard agent activity by default; plugins are for harness-specific detail.
-
-7. **Add tests.** At minimum:
-   - A harness unit test using a mock WorkspaceContext.
-   - An integration test with the daemon verifying suspend/resume preserves session state.
-   - An e2e test that creates a workspace, attaches the harness, and runs a scripted interaction.
-
-8. **Document the harness** in its own README: supported models/assistants, capabilities, configuration schema, and required environment.
-
-A harness must never:
-- Require inbound network access to the workspace.
-- Store durable state only inside the container.
-- Modify the control plane, daemon core, or public API to support itself.
-- Assume a specific compute provider or AI vendor in its core logic (provider/model selection is configuration).
+The Fly Proxy's autostop/autostart means a workspace can scale to zero without
+an explicit Management API call; the API's hibernate/resume are explicit
+shortcuts on top of the same mechanism.
 
 ---
 
-## Integrating New AI Models / Assistants
+## Security Boundary
 
-"Adding a new model" usually means one of two things:
-
-### A. New model backend for an existing harness
-If a harness already supports an agent that can target multiple model backends, adding a model is configuration, not code:
-- Provide the model endpoint/credentials via the templating engine's secret policy.
-- Declare the model in the workspace spec's harness configuration.
-- Ensure the harness's session store can serialize any model-specific context.
-
-No platform changes are required. The harness abstracts the model; the platform only sees the harness.
-
-### B. New assistant that needs its own harness
-If the assistant has a distinct runtime (different launch semantics, different event model, different editor integration), implement a new harness per the steps above. The platform remains unchanged.
-
-### Model selection & policy
-Model selection is a workspace-spec concern, resolved by the templating engine. Organizations can constrain which models/harnesses are available through template policy, so platform operators retain control over model access, cost, and data residency without hard-coding anything into the control plane.
+- **Authentication:** Logto issues short-lived JWTs; the Management API verifies
+  each request against the IdP JWKS (signature, issuer, audience, expiration).
+- **Authorization:** the Management API is the sole gatekeeper (no RLS, no
+  DB-level auth). Every template/session lookup is scoped by `org_id`; cross-org
+  access returns `404`.
+- **Workspace URL = the perimeter.** The reference image disables code-server's
+  own auth (`--auth none`) because the Fly Proxy + per-session URL is the
+  network boundary. Templates that need stronger per-workspace auth should
+  enable it in their own image.
+- **No inbound-to-platform assumption for workspaces.** Workspaces are reached
+  via the Fly Proxy, not by the Management API dialing in. The Management API
+  only calls the Fly REST API outbound.
 
 ---
 
-## Bundled Harnesses
+## Extending the IDE Experience
 
-Bundled harnesses live under `harnesses/`. The flagship integration is:
+To change what runs inside a workspace, contribute a **template Dockerfile**
+rather than platform code:
 
-- **`harnesses/vscode`** — a high-quality integration with Visual Studio / VS Code-family editors. It launches the editor remote experience inside the workspace, binds the multi-repo workspace as the editor's working tree, and exposes agent activity (edits, commands, diagnostics) back through the daemon. The integration is designed so that a human developer and an AI agent can collaborate in the same editor session.
+- Add a language, toolchain, or AI agent runtime by extending
+  `docker/Dockerfile.codeserver-workspace` or authoring a new Dockerfile as a
+  template in the UI.
+- Keep the contract: expose port `8080`, run as a non-root user, serve out of
+  `/workspace`, and disable in-editor auth (the URL is the perimeter).
+- The Management API will build the Dockerfile via the Fly Apps REST API and
+  push it to the Fly internal registry; new workspaces boot from the resulting
+  image ref.
 
-Additional bundled harnesses will be listed here as they are added. Third-party harnesses are encouraged and are first-class — the bundled set is a convenience, not a requirement.
-
----
-
-## Stability & Versioning
-
-- The **harness interface** is versioned independently of the platform. Harnesses declare the interface version they target. Breaking changes require a new interface version and a migration guide.
-- The **Control API** used by the daemon is versioned; harnesses should not call the Control API directly — they go through the daemon.
-- The **session store** schema is harness-defined; the platform guarantees the opaque bytes are preserved across suspend/resume, not their interpretation.
-- **UI plugin extension points** used to render harness-specific detail are versioned per `CONTRIBUTING.md`.
-
-When in doubt, prefer additive changes and configuration over new interface methods. A harness that can be expressed purely through the existing interface + configuration is preferable to one that requires new platform code.
+This keeps the platform small: "support a new agent" == "ship a new template
+image", not "extend the control plane".
 
 ---
 
-For the platform-wide architecture, contributor workflow, and component locations, see `CONTRIBUTING.md`. For the project vision and differentiators, see `README.md`.
+## Future Evolution
+
+The earlier design (the original content of this document) proposed a richer
+agent integration story with an in-container **Workspace Daemon** and a
+pluggable **agent harness abstraction**. It is **not** implemented in the MVP
+and is captured here as a possible future direction, not a current contract.
+
+### Why it was deferred
+The MVP intentionally ships the smallest thing that lets an admin sign up,
+create a sandbox, and connect to a web-based IDE. A daemon/harness layer adds
+real complexity (in-container supervision, an outbound control channel, a
+versioned harness interface, session-state externalization) that the IDE-as-
+workspace model does not need yet.
+
+### What the future design envisioned
+- A **Workspace Daemon** running inside each container, supervising agent
+  processes and reporting state to the control plane over an outbound channel.
+- A **harness interface** — a stable contract an AI-agent integration conforms
+  to (`initialize` / `run` / `suspend` / `resume` / `destroy`, plus capability
+  declaration and `AgentEvent` observation), so new agents plug in without
+  modifying the control plane.
+- **Session state externalized** to the control plane so agent conversations
+  survive workspace recreation ("cattle, not pets" for long-running agent
+  sessions).
+- **Capability declaration** (`EDIT_FILES`, `RUN_COMMANDS`, `READ_REPOS`, …) so
+  the UI gates actions by what an agent can actually do.
+
+### How it would layer onto the current architecture
+If adopted, the daemon would be **packaged into the template image** (it already
+controls the Dockerfile) and the Management API would gain an outbound control
+channel + session-state tables — without changing the Fly Machines/Proxy
+substrate or the gatekeeper model. The IDE-as-workspace path would remain valid
+for workspaces that opt out of the daemon.
+
+Contributors: do not implement any of the above until it is formally adopted in
+an ADR under `docs/`. Until then, the shipped model in
+[The Shipped Model](#the-shipped-model-ide-as-workspace) is the source of truth.
+
+---
+
+For the platform-wide architecture and request flows, see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). For build & test commands, see
+[`AGENTS.md`](AGENTS.md).
