@@ -1,0 +1,33 @@
+# fly.toml for the Cloud Sandbox Management API.
+#
+# The Management API is a standard, long-lived Fly Machine. Workspace sessions
+# are *separate* Fly Machines/Apps provisioned on demand by this API — they are
+# NOT defined here. This app only needs a single shared-vm process and network
+# egress to the Fly Machines REST API.
+
+app = "cloudsandbox-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  HTTP_ADDR = ":8080"
+  # FLY_API_BASE_URL, LOGTO_ISSUER, etc. are set via `fly secrets set`.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+# Scale-to-one: the control plane itself is cheap to keep warm.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

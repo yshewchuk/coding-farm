@@ -1,0 +1,28 @@
+# ---- Local toolchain (not committed) ----
+backend/.toolchain/
+
+# ---- Go ----
+backend/bin/
+backend/dist/
+*.exe
+*.test
+*.out
+coverage.txt
+vendor/
+
+# ---- Node / Frontend ----
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.log
+
+# ---- Local env / secrets ----
+.env
+.env.*
+!.env.example
+*.local
+
+# ---- Editor / OS ----
+.DS_Store
+.idea/
+.vscode/
