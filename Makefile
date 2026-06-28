@@ -4,19 +4,15 @@ help: ## Show this help
 	/^[a-zA-Z0-9_-]+:.*##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 # ----------------------------------------------------------------------------
-# Variables — override on the command line, e.g. `make fly-deploy FLY_APP=my-api`
+# Variables
 # ----------------------------------------------------------------------------
 GO            ?= go
-FLY_CLI       ?= fly
+# Used only by the db-migrate targets below; deploy.sh reads DATABASE_URL itself.
 NEON_DB_URL   ?= $(DATABASE_URL)
-FLY_APP       ?= cloudsandbox-api
-FLY_REGION    ?= iad
-# FLY_ORG, LOGTO_ISSUER, DATABASE_URL, FLY_API_TOKEN, FRONTEND_URL are sourced
-# from the environment (or the command line); they have no defaults here.
-# Note: the canonical deploy path is scripts/deploy.sh (loads .env + derives a
-# Fly token from `fly auth login` when FLY_API_TOKEN is unset). These make
-# targets are a thinner alternative for operators who prefer make; FLY_API_TOKEN
-# must be exported here since make does not load .env.
+# Deploy + Fly config (FLY_ORG, LOGTO_*, FRONTEND_URL, FLY_APP, ...) live in the
+# environment or .env and are consumed by scripts/deploy.sh — make does NOT load
+# .env, so the canonical deploy path is `make fly` (= ./scripts/deploy.sh fly),
+# which loads .env, derives a Fly token from `fly auth login`, and is idempotent.
 
 # ----------------------------------------------------------------------------
 # Local development
@@ -87,24 +83,34 @@ logto-checklist: ## Print the Logto setup steps (M2M seed, then logto-setup)
 # ----------------------------------------------------------------------------
 # Fly.io deployment
 # ----------------------------------------------------------------------------
-.PHONY: fly-deploy
-fly-deploy: ## Deploy the Management API to Fly.io
-	$(FLY_CLI) deploy backend --app $(FLY_APP) --remote-only
+# The canonical, idempotent deploy path is scripts/deploy.sh fly: it loads .env,
+# creates the Fly app if missing, derives a Fly API token from `fly auth login`
+# when FLY_API_TOKEN is unset, sets all secrets, and deploys (migrations run on
+# boot). The old granular fly-app / fly-secrets / fly-deploy targets were a
+# thin, non-idempotent, non-.env-loading duplicate of the same flow and failed
+# on Windows (native make can't exec the `fly` .cmd shim). They now delegate.
+.PHONY: fly
+fly: ## Create + secret + deploy the Management API to Fly.io (idempotent)
+	./scripts/deploy.sh fly
 
-.PHONY: fly-secrets
-fly-secrets: ## Set required secrets on the Fly app (interactive; fill env first)
-	$(FLY_CLI) secrets set \
-	  --app $(FLY_APP) \
-	  DATABASE_URL="$(NEON_DB_URL)" \
-	  FLY_API_TOKEN="$(FLY_API_TOKEN)" \
-	  FLY_ORG="$(FLY_ORG)" \
-	  LOGTO_ISSUER="$(LOGTO_ISSUER)" \
-	  FRONTEND_URL="$(FRONTEND_URL)" \
-	  WORKSPACE_PORT=8080
+.PHONY: deploy
+deploy: ## Full flow: neon (if needed) -> logto -> fly -> frontend build
+	./scripts/deploy.sh all
 
 .PHONY: fly-app
-fly-app: ## Create the Fly app for the Management API (run once)
-	$(FLY_CLI) apps create $(FLY_APP) --org $(FLY_ORG)
+fly-app: ## (Deprecated) alias for `make fly` — the script creates the app if missing
+	@echo ">> 'make fly-app' is deprecated; use 'make fly' (idempotent, loads .env)."
+	./scripts/deploy.sh fly
+
+.PHONY: fly-secrets
+fly-secrets: ## (Deprecated) alias for `make fly`
+	@echo ">> 'make fly-secrets' is deprecated; use 'make fly'."
+	./scripts/deploy.sh fly
+
+.PHONY: fly-deploy
+fly-deploy: ## (Deprecated) alias for `make fly`
+	@echo ">> 'make fly-deploy' is deprecated; use 'make fly'."
+	./scripts/deploy.sh fly
 
 # ----------------------------------------------------------------------------
 # Reference workspace image
@@ -122,11 +128,12 @@ docker-run-workspace: ## Run the sample workspace image locally on :8080
 # ----------------------------------------------------------------------------
 .PHONY: bootstrap
 bootstrap: ## Print the end-to-end self-host bootstrap steps
-	@echo "Self-host bootstrap:"
-	@echo "  1. Provision Neon Postgres; export DATABASE_URL."
-	@echo "  2. Deploy Logto (or use Logto Cloud); see: make logto-checklist"
-	@echo "  3. make fly-app          # create the API Fly app"
-	@echo "  4. make fly-secrets       # set secrets (DATABASE_URL, FLY_API_TOKEN, ...)"
-	@echo "  5. make fly-deploy        # deploy the API (runs migrations on boot)"
-	@echo "  6. Deploy the frontend (any static host); set VITE_* env vars."
-	@echo "  7. Sign in, create a template, build it, launch a workspace, Open IDE."
+	@echo "Self-host bootstrap (one command: ./scripts/deploy.sh all):"
+	@echo "  1. fly auth login; fly orgs list  (or: fly orgs create <name>) -> FLY_ORG"
+	@echo "  2. cp .env.example .env; fill FLY_ORG, LOGTO_ISSUER, LOGTO_AUDIENCE,"
+	@echo "     FRONTEND_URL (leave DATABASE_URL blank to auto-create via neonctl)."
+	@echo "  3. Seed one Logto M2M app (console) -> LOGTO_M2M_APP_ID/SECRET in .env."
+	@echo "  4. make fly                # = ./scripts/deploy.sh fly: create+secret+deploy"
+	@echo "     (or) ./scripts/deploy.sh all   # neon -> logto -> fly -> frontend build"
+	@echo "  5. Deploy frontend/dist/ to a static host; set VITE_* env vars."
+	@echo "  6. Sign in, create a template, build it, launch a workspace, Open IDE."
