@@ -1,0 +1,63 @@
+# Reference workspace image: Ubuntu + dev tooling + code-server (VS Code in the browser).
+#
+# This Dockerfile is what a Cloud Sandbox template's dockerfile_contents would
+# typically contain. When a user requests a build, the Management API sends this
+# to the Fly Apps build API, which pushes the resulting image to Fly's internal
+# registry. Workspace machines then boot this image and mount an NVMe Fly
+# Volume at /workspace for persistent, high-speed IDE storage.
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+
+# ---- Base development tooling ------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        gnupg \
+        openssh-client \
+        sudo \
+        unzip \
+        vim \
+        build-essential \
+        locales \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN locale-gen en_US.UTF-8
+
+# ---- Go toolchain ------------------------------------------------------------
+ENV GOLANG_VERSION=1.23.4 \
+    GOROOT=/usr/local/go \
+    GOPATH=/go
+ENV PATH="${GOROOT}/bin:${GOPATH}/bin:${PATH}"
+RUN curl -fsSL "https://go.dev/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz" \
+    | tar -C /usr/local -xz && \
+    mkdir -p "${GOPATH}/bin"
+
+# ---- code-server (open-source VS Code in the browser) ------------------------
+RUN curl -fsSL https://code-server.dev/install.sh | sh
+
+# Run code-server as a non-root developer user so the mounted /workspace files
+# are not owned by root.
+RUN useradd --create-home --shell /bin/bash --uid 1000 dev \
+    && echo 'dev ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+
+# ---- Persistent workspace mount point ----------------------------------------
+# The Management API mounts a Fly NVMe Volume here. Create the dir owned by the
+# dev user so code-server can write into it on first boot.
+RUN mkdir -p /workspace && chown -R dev:dev /workspace
+
+USER dev
+WORKDIR /workspace
+
+# code-server binds 0.0.0.0:8080 and serves the mounted /workspace as the root
+# folder. Authentication is disabled here because the Fly Proxy terminates TLS
+# and the Management API controls access at the network layer (per-session URL).
+EXPOSE 8080
+CMD ["code-server", \
+     "--bind-addr", "0.0.0.0:8080", \
+     "--auth", "none", \
+     "--disable-telemetry", \
+     "/workspace"]
