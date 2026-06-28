@@ -25,7 +25,7 @@ ENV_FILE="${ENV_FILE:-$ROOT/.env}"
 
 # ANSI colors, disabled when not a TTY.
 if [ -t 1 ]; then C_HEAD='\033[1;36m'; C_OK='\033[32m'; C_WARN='\033[33m'; C_ERR='\033[31m'; C_OFF='\033[0m'; else C_HEAD=''; C_OK=''; C_WARN=''; C_ERR=''; C_OFF=''; fi
-head()  { printf "${C_HEAD}==> %s${C_OFF}\n" "$*"; }
+section()  { printf "${C_HEAD}==> %s${C_OFF}\n" "$*"; }
 ok()    { printf "${C_OK}   ✓ %s${C_OFF}\n" "$*"; }
 warn()  { printf "${C_WARN}   ! %s${C_OFF}\n" "$*"; }
 err()   { printf "${C_ERR}   ✗ %s${C_OFF}\n" "$*" >&2; }
@@ -39,14 +39,18 @@ require_env() {
 }
 
 # Load a .env file if present (does not override already-set env vars).
+# Strips trailing CR so CRLF .env files saved on Windows don't corrupt values.
 load_env() {
-  if [ -f "$ENV_FILE" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    . "$ENV_FILE"
-    set +a
-    ok "loaded env from $ENV_FILE"
-  fi
+  [ -f "$ENV_FILE" ] || return 0
+  local tmp
+  tmp="$(mktemp)"
+  sed 's/\r$//' "$ENV_FILE" > "$tmp"
+  set -a
+  # shellcheck disable=SC1090
+  . "$tmp"
+  set +a
+  rm -f "$tmp"
+  ok "loaded env from $ENV_FILE"
 }
 
 # Validate a URL-ish origin (no trailing slash).
@@ -66,7 +70,7 @@ validate_origin() {
 # Preflight for the Fly deploy step. DATABASE_URL is expected to be set by now
 # (created by neon_create, or supplied manually / via .env).
 preflight() {
-  head "Preflight"
+  section "Preflight"
   need_cmd fly
   need_cmd jq
   require_env FLY_ORG "your Fly.io org slug"
@@ -84,7 +88,7 @@ preflight() {
 # Step 1 (optional): provision a Neon project with neonctl
 # -----------------------------------------------------------------------------
 neon_create() {
-  head "Neon project (neonctl)"
+  section "Neon project (neonctl)"
   need_cmd neonctl
   need_cmd jq
   local region="${NEON_REGION:-aws-us-east-1}"
@@ -118,7 +122,7 @@ neon_create() {
 # "Logto Management API" role (scope `all`). After that seed step, `logto-setup`
 # creates/updates the SPA application + API resource idempotently via the API.
 logto_checklist() {
-  head "Logto (one-time M2M seed)"
+  section "Logto (one-time M2M seed)"
   cat <<EOF
 Logto's Management API needs machine credentials to manage itself, so create
 one M2M app by hand (once). Then 'scripts/deploy.sh logto-setup' automates the
@@ -176,7 +180,7 @@ logto_api() {
 }
 
 logto_setup() {
-  head "Logto setup (SPA app + API resource)"
+  section "Logto setup (SPA app + API resource)"
   need_cmd curl
   need_cmd jq
   require_env LOGTO_ISSUER "e.g. https://your-tenant.logto.app"
@@ -236,7 +240,7 @@ logto_setup() {
 # Step 3: deploy the Management API to Fly.io
 # -----------------------------------------------------------------------------
 fly_deploy() {
-  head "Deploy Management API to Fly.io"
+  section "Deploy Management API to Fly.io"
   need_cmd fly
   local app="${FLY_APP:-cloudsandbox-api}"
 
@@ -273,7 +277,7 @@ fly_deploy() {
 # Step 4: build the frontend bundle
 # -----------------------------------------------------------------------------
 frontend_build() {
-  head "Build frontend bundle"
+  section "Build frontend bundle"
   need_cmd npm
   require_env LOGTO_APP_ID "the Logto SPA application id (create it once; see 'scripts/deploy.sh logto')"
   local api_url="${1:-https://${FLY_APP:-cloudsandbox-api}.fly.dev}"
@@ -343,7 +347,7 @@ case "$cmd" in
     fi
     api_url="$(fly_deploy)"
     frontend_build "$api_url"
-    head "Done"
+    section "Done"
     ok "Next: deploy frontend/dist/ to a static host at $FRONTEND_URL, then sign in."
     ;;
   preflight)    preflight ;;
