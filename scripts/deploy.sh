@@ -76,7 +76,7 @@ preflight() {
   require_env FLY_ORG "your Fly.io org slug (run 'fly orgs list'; create one with 'fly orgs create')"
   require_env LOGTO_ISSUER "e.g. https://your-tenant.logto.app"
   validate_origin "$LOGTO_ISSUER"
-  require_env DATABASE_URL "run 'scripts/deploy.sh neon-create' or paste it from the Neon console"
+  ensure_database_url
   require_env LOGTO_AUDIENCE "the Logto API resource indicator"
   require_env FRONTEND_URL "the deployed frontend origin, e.g. https://app.example.com"
   validate_origin "$FRONTEND_URL"
@@ -102,6 +102,21 @@ ensure_fly_token() {
   FLY_API_TOKEN="$(fly auth token)"
   export FLY_API_TOKEN
   warn "FLY_API_TOKEN not set; derived from 'fly auth token' (logged-in session). It is set as a runtime secret but not persisted to .env — set it there for non-interactive redeploys."
+}
+
+# Ensure DATABASE_URL is set. If already provided (env or .env) it is used
+# as-is; otherwise we try to create a Neon project with neonctl and persist it
+# back to .env. Called from preflight so every command (all/fly/frontend) gets
+# the same auto-create fallback — not just `all`.
+ensure_database_url() {
+  [ -n "${DATABASE_URL:-}" ] && return
+  if command -v neonctl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    neon_create
+    return
+  fi
+  die "DATABASE_URL is not set. Either:
+  - run 'scripts/deploy.sh neon-create' (requires neonctl + a NEON_API_KEY), or
+  - set DATABASE_URL yourself (from the Neon console) and re-run."
 }
 
 # -----------------------------------------------------------------------------
@@ -352,16 +367,8 @@ load_env
 case "$cmd" in
   all)
     load_env
-    # Create the Neon project on the first run if a DATABASE_URL was not supplied.
-    if [ -z "${DATABASE_URL:-}" ]; then
-      if command -v neonctl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-        neon_create
-      else
-        die "DATABASE_URL is not set. Either:
-  - run 'scripts/deploy.sh neon-create' (requires neonctl + a NEON_API_KEY), or
-  - set DATABASE_URL yourself (from the Neon console) and re-run."
-      fi
-    fi
+    # preflight auto-creates the Neon project when DATABASE_URL is blank, so
+    # every command (all/fly/frontend) shares the same fallback.
     preflight
     if [ -n "${LOGTO_M2M_APP_ID:-}" ] && [ -n "${LOGTO_M2M_APP_SECRET:-}" ]; then
       logto_setup

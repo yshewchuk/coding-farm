@@ -97,9 +97,8 @@ The [`Makefile`](Makefile) documents the full sequence. Highlights:
 ```bash
 make bootstrap         # print the end-to-end checklist
 make logto-checklist   # Logto OIDC configuration steps
-make fly-app           # create the API Fly app (once)
-make fly-secrets       # set DATABASE_URL, FLY_API_TOKEN, LOGTO_ISSUER, ...
-make fly-deploy        # deploy the API (migrations run automatically on boot)
+make fly               # create + secret + deploy the API (idempotent; loads .env)
+# (the old fly-app / fly-secrets / fly-deploy targets are deprecated aliases)
 # Deploy frontend/ to any static host; set VITE_* env vars at build time.
 ```
 
