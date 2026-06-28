@@ -1,152 +1,128 @@
-# <Project Name>
+# Cloud Sandbox
 
-> A modern, self-hosted cloud coding platform built for AI coding agents and complex, multi-repository development workflows.
+A self-hosted, lightweight cloud sandbox environment for disposable development
+workspaces (à la Daytona / Cursor Cloud Agents), built on **Fly.io Firecracker
+microVMs**, **Neon Serverless Postgres**, and **Logto** authentication with
+native scale-to-zero.
 
-> **Status:** Early-stage / experimental. APIs and architecture are subject to change.
-
-`<Project Name>` is an open-source, self-hosted platform for running AI coding agents and human developers in reproducible, disposable development environments. It is designed from the ground up to treat development containers as **ephemeral resources** ("cattle, not pets") while providing first-class support for **multi-repository workspaces** and **pluggable agent harnesses**.
-
----
-
-## Why Another Cloud Coding Platform?
-
-Existing cloud development environments tend to fall into one of two camps:
-
-1. **Hosted SaaS platforms** that are easy to use but lock you into a vendor, a region, and their billing model.
-2. **Long-lived dev containers** that slowly accumulate state, drift from their intended configuration, and become impossible to safely reproduce.
-
-`<Project Name>` takes a different stance. Every workspace is:
-
-- **Disposable** — spun up from a template, torn down when no longer needed, and recreatable from configuration alone.
-- **Reproducible** — initialized from version-controlled templates combined with deterministic repository synchronization.
-- **Multi-repository by default** — a single workspace can mount and operate across many repositories at once, which is essential for AI agents that need to navigate cross-cutting changes.
-- **Agent-first** — the platform is built around the assumption that the primary "user" of a workspace may be an AI coding agent, not a human typing in a terminal.
+> **Status:** MVP. A single administrator can sign up, define a Dockerfile
+> template, build it on Fly, launch a sandbox, and connect to a web-based VS
+> Code (code-server) running inside it.
 
 ---
 
-## Core Objectives & Differentiators
-
-### Ephemeral Dev Containers
-Workspaces are short-lived, automatically managed resources. Lifecycle operations (create, snapshot, suspend, destroy) are handled by the control plane so that developers and agents never need to think about the underlying container runtime. Because state lives outside the container, a workspace can be destroyed and recreated in seconds without losing work.
-
-### Multi-Repo Agent Workspaces
-A workspace is not bound to a single repository. Workspaces aggregate multiple repositories into a single working tree with shared tooling, environment variables, and agent context. This enables workflows such as:
-
-- An agent making a coordinated change across a service and its clients.
-- Cross-repo refactors with a single source of truth for dependencies.
-- Monorepo-like ergonomics over a polyrepo reality.
-
-### Diverse Agent Harnesses
-The platform does not assume a single coding agent. It ships with a harness abstraction that can integrate arbitrary AI coding assistants — from CLI-based agents to fully integrated editor experiences, including high-quality integration with **Visual Studio**. New harnesses can be added without modifying the core control plane.
-
-### Self-Hosted Infrastructure
-`<Project Name>` is designed to run on infrastructure you control. There is no mandatory cloud account, no required managed database, and no telemetry phone-home. Deployment targets range from a single node to a full Kubernetes cluster.
-
-### Vendor Neutrality
-The platform is agnostic to specific cloud providers. Compute is abstracted behind a provider interface so that the same workspace definition can run on bare metal, a private cloud, or a hyperscaler. Instance types, regions, and capacity are configuration, not architecture.
-
-### Extensibility
-A modular design lets you extend the platform at every layer:
-
-- **Agent harnesses** — plug in new AI models and coding assistants.
-- **Web interface** — a plugin architecture for custom front-ends and surfaced integration details.
-- **API layer** — a stable control-plane API for programmatic workspace management.
-- **Workspace Daemon** — an in-container process that exposes hooks for custom lifecycle behavior.
-
----
-
-## System Architecture
-
-The platform is composed of five cooperating components. See `CONTRIBUTING.md` for a developer-oriented deep dive and `agents.md` for the agent integration specification.
-
-| Component | Responsibility |
-| --- | --- |
-| **Workspace Daemon** | A lightweight process running *inside* each agent container. Manages local execution, agent process lifecycle, and per-workspace state. Communicates with the API Layer over a control channel. |
-| **Workspace Templating Engine** | Merges organization-level workspace templates with individual developer preferences to produce a final, reproducible workspace configuration. |
-| **Repository Synchronization** | Ensures every new (and resumed) workspace is initialized with the latest repository code, deterministically and without manual `git clone` steps. |
-| **API Layer** | The central control plane. Handles workspace lifecycle (create/suspend/resume/destroy), routes state and session traffic between active workspaces and the platform, and exposes the stable public API. |
-| **Web Interface** | A management dashboard for interacting with cloud agents. Features a plugin architecture to support custom front-ends and surface integration-specific details directly in the UI. |
+## Architecture
 
 ```
-                 ┌─────────────────────────────────────────────┐
-                 │                 Web Interface                │
-                 │   (management dashboard + plugin front-ends)  │
-                 └──────────────────────┬──────────────────────┘
-                                        │  HTTPS / control API
-                 ┌──────────────────────▼──────────────────────┐
-                 │                  API Layer                    │
-                 │   workspace lifecycle · state/session routing  │
-                 │   templating engine · repo sync orchestration  │
-                 └──────┬───────────────────────────┬──────────┘
-      control channel  │                             │  templating + sync
-                 ┌──────▼──────────┐          ┌──────▼──────────────────┐
-                 │ Workspace Daemon │          │  Repo Sync / Templates  │
-                 │  (in container)  │          └─────────────────────────┘
-                 └──────┬──────────┘
-                        │ spawns / supervises
-                 ┌──────▼──────────────────────────────────────┐
-                 │          Agent Harness(es)                   │
-                 │   CLI agents · editor integrations · custom   │
-                 └──────────────────────────────────────────────┘
+┌─────────────────┐   JWT (Logto)    ┌──────────────────────┐
+│  React + Vite   │ ───────────────▶ │  Go Management API   │
+│  (this repo)    │ ◀─── REST ────── │  (sole gatekeeper)   │
+└─────────────────┘                  └──────────┬───────────┘
+        │                                       │
+        │ Logto OIDC                            │ pgx (master pool)
+        ▼                                       ▼
+┌─────────────────┐                  ┌──────────────────────┐
+│   Logto IdP     │                  │  Neon Postgres       │
+│  (auth + orgs)  │                  │  (scale-to-zero)     │
+└─────────────────┘                  └──────────────────────┘
+                                             │
+                          Fly Machines/Apps REST API
+                                             ▼
+                                  ┌──────────────────────┐
+                                  │ Per-session Fly App  │
+                                  │  ┌────────────────┐  │
+                                  │  │ Firecracker   │  │  autostop=suspend
+                                  │  │  machine      │  │  autostart=true
+                                  │  │  (code-server) │  │      (scale-to-zero)
+                                  │  └───────┬───────┘  │
+                                  │   NVMe volume @/workspace
+                                  └──────────────────────┘
 ```
 
----
+### Principles
+- **No vendor lock-in for auth/data:** Logto and Neon are swappable; the API
+  talks plain Postgres via `pgx` and validates JWTs against any OIDC JWKS.
+- **No Row-Level Security:** the Go Management API is the **sole gatekeeper**.
+  All authorization is enforced in application code using a master connection
+  pool; the database holds no auth logic.
+- **Scale-to-zero:** workspace machines use the Fly Proxy's `autostop=suspend`
+  + `autostart=true` so idle sandboxes cost nothing and wake on the next
+  request to their unique URL.
 
-## Getting Started
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
-> The platform is in early development. The instructions below describe the intended end-user experience; some pieces may still be under construction. See `CONTRIBUTING.md` for the current state of local development.
+## Repository layout
+
+```
+backend/    Go Management API (cmd/api, internal/{config,db,auth,fly,service,api})
+frontend/   React + Vite UI (Logto auth, dashboard, template manager)
+docker/     Reference code-server workspace Dockerfile
+```
+
+## Quick start (local dev)
 
 ### Prerequisites
-- A container runtime (Docker or a compatible OCI runtime).
-- A control-plane host (a single VM is sufficient for evaluation; Kubernetes for production).
-- One or more repositories you want to develop against.
+- Go 1.23+
+- Node 20+
+- A Neon Postgres database (free tier works) — set `DATABASE_URL`
+- A Logto instance — set the `LOGTO_*` vars
+- A Fly.io account + API token — set `FLY_API_TOKEN` and `FLY_ORG`
 
-### Quick Start (intended)
+### 1. Backend
 ```bash
-# Deploy the control plane (self-hosted)
-project-name deploy --config ./platform.yaml
-
-# Create a multi-repo workspace from a template
-project-name workspace create \
-  --template org/backend-services \
-  --repo github.com:acme/payments.git \
-  --repo github.com:acme/clients.git
-
-# Attach an agent harness to the workspace
-project-name agent attach --harness vscode --workspace ws-123
+cp backend/.env.example backend/.env   # fill in DATABASE_URL, FLY_*, LOGTO_*
+make backend-run                        # starts :8080, runs migrations on boot
 ```
 
----
+### 2. Frontend
+```bash
+cp frontend/.env.example frontend/.env.local  # fill in VITE_LOGTO_*
+make frontend-install
+make frontend-dev                               # starts :5173, proxies /api -> :8080
+```
 
-## Documentation
-- **`CONTRIBUTING.md`** — Local setup, architecture walkthrough, and how to contribute to each layer (API, UI plugins, Workspace Daemon).
-- **`agents.md`** — Technical specification for the AI agent integration: harness architecture, workspace support, and how to add new models/assistants.
+### 3. Use it
+1. Open http://localhost:5173 → sign in / sign up via Logto.
+2. **Templates** → a default code-server Dockerfile is pre-filled → **Save**
+   → **Build image** (builds on Fly).
+3. **Workspaces** → pick the template → **Create workspace** → **Open IDE** ↗.
 
----
+## Self-hosting (production)
 
-## Project Goals / Non-Goals
+The [`Makefile`](Makefile) documents the full sequence. Highlights:
 
-### Goals
-- Make AI coding agents productive in self-hosted, multi-repo environments.
-- Keep workspaces reproducible and disposable without sacrificing developer ergonomics.
-- Remain deployable on infrastructure the operator fully controls.
-- Stay vendor- and model-neutral across compute providers and AI providers.
+```bash
+make bootstrap         # print the end-to-end checklist
+make logto-checklist   # Logto OIDC configuration steps
+make fly-app           # create the API Fly app (once)
+make fly-secrets       # set DATABASE_URL, FLY_API_TOKEN, LOGTO_ISSUER, ...
+make fly-deploy        # deploy the API (migrations run automatically on boot)
+# Deploy frontend/ to any static host; set VITE_* env vars at build time.
+```
 
-### Non-Goals
-- Becoming a hosted SaaS. There is no managed offering of this project.
-- Replacing your existing CI/CD system. Workspaces are for development and agent execution, not production builds.
-- Lock-in to a specific AI vendor, editor, or container runtime.
+## Testing
 
----
+```bash
+make backend-test      # unit tests: Fly client mock, JWT verification, orchestration
+make backend-vet
+make frontend-build    # typecheck-free build of the UI bundle
+```
+
+The Go unit tests fully mock the Fly Machines REST API and the Logto JWT
+verification layer (real RSA keys + a fake JWKS server), so the business logic
+is verified without any external dependencies.
+
+## Security model
+
+- Logto authenticates users and issues short-lived access tokens (JWT).
+- The Go API validates each request's bearer token against Logto's JWKS
+  (`lestrrat-go/jwx/v3`), checking signature, issuer, audience, and expiration.
+- The first authenticated request auto-provisions a local user and a personal
+  organization (MVP single-admin mode), or an org from a token claim
+  (multi-tenant).
+- Every resource lookup (template, session) is scoped by `org_id`, so a
+  request from another organization gets a `404` — the authorization boundary.
 
 ## License
-`<Project Name>` is open-source software. License details will be added prior to the first public release (intended: a permissive OSI-approved license such as Apache 2.0 or MIT).
 
----
-
-## Community
-- **Issues:** File bugs and feature requests in the issue tracker.
-- **Contributing:** Read `CONTRIBUTING.md` before opening a pull request.
-- **Discussions:** Use GitHub Discussions for design conversations and questions.
-
-This project follows a Code of Conduct that all contributors are expected to uphold.
+Open-source under the terms in [`LICENSE`](LICENSE).

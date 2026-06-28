@@ -1,12 +1,23 @@
-# Contributing to `<Project Name>`
+# Contributing to Cloud Sandbox
 
-First off — thank you for considering a contribution. `<Project Name>` is an open-source, self-hosted cloud coding platform for AI coding agents, and community contributions are essential to making it vendor-neutral, extensible, and useful across a wide range of infrastructure.
+First off — thank you for considering a contribution. Cloud Sandbox is an
+open-source, self-hosted platform for disposable development environments
+running on **Fly.io Firecracker microVMs**, with **Neon Serverless Postgres**
+for state and **Logto** for authentication. Community contributions help keep it
+vendor-neutral, lightweight, and useful across self-hosted infrastructure.
 
 This guide covers:
 
 1. Setting up the project locally.
 2. The architecture of the platform and each component.
-3. How to contribute to each layer (API, UI plugins, Workspace Daemon, templating, repo sync).
+3. How to contribute to each layer (backend, frontend, workspace images, ops).
+
+> **Direction note:** This project pivoted from an earlier "multi-repo AI agent
+> platform with an in-container Workspace Daemon and harness abstraction"
+> design to a leaner, concrete implementation on Fly.io + Neon + Logto. The
+> documentation below describes what is actually in the repository. The earlier
+> daemon/harness ideas are captured as a future direction in
+> [`agents.md`](agents.md) under "Future evolution".
 
 ---
 
@@ -17,12 +28,11 @@ This guide covers:
 - [Local Setup](#local-setup)
 - [Architecture Overview](#architecture-overview)
 - [Contributing by Layer](#contributing-by-layer)
-  - [API Layer (control plane)](#api-layer-control-plane)
-  - [Web Interface & UI Plugins](#web-interface--ui-plugins)
-  - [Workspace Daemon](#workspace-daemon)
-  - [Workspace Templating Engine](#workspace-templating-engine)
-  - [Repository Synchronization](#repository-synchronization)
-- [Agent Harnesses](#agent-harnesses)
+  - [Backend (Go Management API)](#backend-go-management-api)
+  - [Frontend (React + Vite)](#frontend-react--vite)
+  - [Workspace Images (Docker)](#workspace-images-docker)
+  - [Ops & Deployment](#ops--deployment)
+- [Agent / IDE Model](#agent--ide-model)
 - [Testing](#testing)
 - [Coding Standards](#coding-standards)
 - [Pull Request Process](#pull-request-process)
@@ -31,220 +41,318 @@ This guide covers:
 ---
 
 ## Code of Conduct
-Participation in this project is governed by the project's Code of Conduct. By participating you agree to abide by its terms. Please report unacceptable behavior to the maintainers via the security contact listed in the repository.
+Participation in this project is governed by the project's Code of Conduct. By
+participating you agree to abide by its terms. Please report unacceptable
+behavior to the maintainers via the security contact listed in the repository.
 
 ---
 
 ## Repository Layout
 
-The repository is organized by component so that each layer can be developed and released somewhat independently.
+The repository is organized by the three deployable concerns: the control
+plane, its UI, and the workspace image recipes.
 
 ```
 .
-├── README.md                  # Project overview and vision
+├── README.md                  # Project overview, quick start, self-hosting
 ├── CONTRIBUTING.md            # This file
-├── agents.md                  # AI agent integration specification
-├── docs/                      # Long-form design docs and ADRs
-├── api/                       # Control plane (API Layer)
-│   ├── cmd/                   # Server entrypoints
-│   ├── internal/              # Internal services (lifecycle, routing, authn/z)
-│   ├── proto/                 # Public API definitions (gRPC + REST)
-│   └── providers/             # Compute/storage provider implementations
-├── web/                       # Web Interface (dashboard + plugin runtime)
-│   ├── app/                   # Core dashboard application
-│   ├── plugins/               # Built-in UI plugins
-│   └── sdk/                   # Plugin SDK for third-party front-ends
-├── daemon/                    # Workspace Daemon (runs inside containers)
-│   ├── cmd/
+├── AGENTS.md                  # Canonical build & test commands (machine + human)
+├── agents.md                  # Agent / IDE integration model + future direction
+├── Makefile                   # Self-hosting + dev task targets
+├── docs/
+│   └── ARCHITECTURE.md        # Component & request-flow design doc
+├── backend/                   # Go Management API (the control plane)
+│   ├── cmd/api/               # HTTP server entry point
 │   ├── internal/
-│   └── harness/               # Harness host-side glue (spawning/supervising agents)
-├── templating/                # Workspace Templating Engine
-├── reposync/                  # Repository Synchronization
-├── harnesses/                 # Bundled agent harness integrations (e.g. vscode)
-│   └── vscode/
-├── deploy/                    # Deployment manifests (compose, k8s, bare-metal)
-└── e2e/                       # End-to-end test harness
+│   │   ├── config/            # Env-based configuration
+│   │   ├── db/                # pgx pool, embedded migrations, repositories
+│   │   ├── auth/              # Logto JWT verification + identity injection
+│   │   ├── fly/               # Fly Machines + Apps REST API clients
+│   │   ├── service/           # Workspace orchestration (the business logic)
+│   │   ├── api/               # HTTP handlers, routing, error mapping
+│   │   └── models/            # Shared domain types
+│   ├── migrations -> internal/db/migrations  # (migrations live under internal/db)
+│   ├── fly.toml               # Fly config for the Management API
+│   ├── Dockerfile             # Multi-stage build (distroless runtime)
+│   └── go.mod
+├── frontend/                  # React + Vite management UI
+│   ├── src/
+│   │   ├── components/        # AuthScreen, Callback, Dashboard, Templates
+│   │   ├── hooks/             # useApiData
+│   │   ├── api.js             # Typed Management API client
+│   │   ├── logto.js           # Logto OIDC config
+│   │   ├── config.js          # import.meta.env wiring
+│   │   ├── App.jsx / main.jsx # Routing + providers
+│   │   └── styles.css
+│   ├── public/
+│   ├── vite.config.js
+│   └── package.json
+└── docker/                    # Reference workspace image Dockerfiles
+    └── Dockerfile.codeserver-workspace
 ```
 
-> Component languages and toolchains are documented in each component's own `README`. The platform favors a small number of mainstream runtimes to keep the contributor surface area manageable.
+> Component toolchains: the backend is Go 1.23, the frontend is Node 20 + Vite.
+> See each component's section for exact commands; `AGENTS.md` is the canonical,
+> copy-pasteable source of truth for build/test commands.
 
 ---
 
 ## Development Prerequisites
-- A container runtime (Docker or compatible OCI runtime).
-- The language toolchains for the components you intend to work on (see each component's README).
+- **Go** 1.23+ (only needed for backend work).
+- **Node** 20+ (only needed for frontend work).
 - `git`, `make`, and a POSIX shell.
-- For end-to-end tests: the ability to run local containers and bind a loopback port for the control plane.
+- External accounts for integration testing (optional for unit tests):
+  - A **Neon** Postgres database (free tier works) — set `DATABASE_URL`.
+  - A **Logto** instance (or Logto Cloud) — set the `LOGTO_*` vars.
+  - A **Fly.io** account + API token — set `FLY_API_TOKEN` and `FLY_ORG`.
+- A container runtime (Docker) only if you want to build/run the reference
+  workspace image locally.
+
+> **Unit tests require no external services.** The Fly Machines client and the
+> Logto JWT verifier are exercised against in-process fakes and a test JWKS
+> HTTP server, so `go test ./...` runs offline.
 
 ---
 
 ## Local Setup
 
-A single `make` target brings up a complete local stack: control plane, web interface, a sample workspace daemon, and a bundled harness.
-
+### Backend
 ```bash
-git clone https://github.com/<org>/<project-name>.git
-cd <project-name>
-
-# Bootstrap dependencies and toolchains for all components
-make bootstrap
-
-# Start the local dev stack (control plane + web + one test workspace)
-make dev
-
-# Run the full test suite
-make test
+cp backend/.env.example backend/.env   # fill in DATABASE_URL, FLY_*, LOGTO_*
+make backend-run                        # binds :8080, runs migrations on boot
 ```
 
-`make dev` exposes:
-- The **Web Interface** at `http://localhost:<web-port>`.
-- The **Control API** (gRPC + REST) at `http://localhost:<api-port>`.
-
-You can create a sample multi-repo workspace and attach the bundled Visual Studio harness via the dashboard or the CLI:
+### Frontend
 ```bash
-make cli
-./bin/project-name workspace create --template samples/multi-repo
-./bin/project-name agent attach --harness vscode --workspace ws-local
+cp frontend/.env.example frontend/.env.local   # fill in VITE_LOGTO_*
+make frontend-install
+make frontend-dev                               # binds :5173, proxies /api -> :8080
 ```
+
+The Vite dev server proxies `/api` and `/health` to the Go backend, so the
+browser uses a same-origin origin while the API runs on `:8080`.
+
+### Use it
+1. Open http://localhost:5173 → sign in / sign up via Logto.
+2. **Templates** → a default code-server Dockerfile is pre-filled → **Save** →
+   **Build image** (builds on Fly).
+3. **Workspaces** → pick the template → **Create workspace** → **Open IDE** ↗.
 
 ---
 
 ## Architecture Overview
 
-`<Project Name>` is a control plane plus an in-container agent runtime. The five components cooperate as follows:
+Cloud Sandbox is a **control plane** (the Go Management API) plus a thin
+**management UI**, both talking to external services. There is no in-container
+daemon in the MVP — a workspace is simply a Fly Firecracker machine booting a
+template image with a code-server IDE, exposed through the Fly Proxy.
 
-1. **Workspace Daemon** (in-container) supervises agent processes and holds per-workspace state. It dials out to the control plane and maintains a long-lived control channel — workspaces are never exposed inbound to the platform, which keeps them portable across NAT'd or firewalled infrastructure.
-2. **Workspace Templating Engine** resolves a workspace request (template + developer overrides + repo list) into a concrete workspace spec: container image, environment, mounts, harness, and sync plan.
-3. **Repository Synchronization** materializes the requested repositories into the new workspace deterministically (pinned refs, shallow where appropriate, atomic application) so every workspace starts from identical code.
-4. **API Layer** is the single control-plane entrypoint. It owns workspace lifecycle (create / suspend / resume / snapshot / destroy), routes state and session traffic between active workspaces and the web interface, and persists only the durable state required to recreate workspaces.
-5. **Web Interface** is the operator/developer dashboard. It consumes the Control API and hosts a plugin runtime so that harness-specific or organization-specific front-ends can be loaded without forking the dashboard.
+```
+┌─────────────────┐   JWT (Logto)    ┌──────────────────────┐
+│  React + Vite   │ ───────────────▶ │  Go Management API   │
+│  (this repo)    │ ◀─── REST ────── │  (sole gatekeeper)   │
+└─────────────────┘                  └──────────┬───────────┘
+        │                                       │
+        │ Logto OIDC                            │ pgx (master pool)
+        ▼                                       ▼
+┌─────────────────┐                  ┌──────────────────────┐
+│   Logto IdP     │                  │  Neon Postgres       │
+│  (auth + orgs)  │                  │  (scale-to-zero)     │
+└─────────────────┘                  └──────────────────────┘
+                                             │
+                          Fly Machines/Apps REST API
+                                             ▼
+                                  ┌──────────────────────┐
+                                  │ Per-session Fly App  │
+                                  │  ┌────────────────┐  │  autostop=suspend
+                                  │  │ Firecracker   │  │  autostart=true
+                                  │  │  machine      │  │      (scale-to-zero)
+                                  │  │  (code-server) │  │
+                                  │  └───────┬───────┘  │
+                                  │   NVMe volume @/workspace
+                                  └──────────────────────┘
+```
 
-State is intentionally external to containers: the platform stores workspace specs, session metadata, and snapshots, but never depends on a container staying alive. This is what makes workspaces disposable.
+Key invariants:
+- **No Row-Level Security, no DB-level auth.** The Management API is the sole
+  authorization gatekeeper. All ownership checks are application code against a
+  master `pgx` connection pool (the anti-lock-in rule).
+- **Per-session Fly Apps.** Each workspace becomes its own Fly App so it gets a
+  unique scale-to-zero URL for free via the Fly Proxy — no custom routing layer.
+- **Scale-to-zero.** Workspace machines use `autostop="suspend"` +
+  `autostart=true`, so idle sandboxes cost nothing and wake on the next request
+  to their URL. TLS termination and WebSocket passthrough are handled natively
+  by the Fly edge proxy.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and the
+end-to-end request flow for "create a workspace".
 
 ---
 
 ## Contributing by Layer
 
-### API Layer (control plane)
-Location: `api/`
+### Backend (Go Management API)
+Location: `backend/` · Module: `github.com/cloudsandbox/platform`
 
-The API Layer is the brain of the platform. Contributions here usually fall into one of:
+The backend is the brain of the platform. Contributions usually fall into one of
+the internal packages:
 
-- **Workspace lifecycle** — new lifecycle transitions, improved scheduling, or better suspend/resume semantics in `api/internal/lifecycle`.
-- **State/session routing** — how messages and session traffic flow between the web interface and active workspaces (`api/internal/routing`).
-- **Provider implementations** — new compute or storage backends under `api/providers`. Each provider implements the `Provider` interface so the control plane stays vendor-neutral. This is the primary entry point for "make it run on my infrastructure" contributions.
-- **Public API surface** — protocol definitions in `api/proto`. The public API is versioned; changes require an updated API version or a backward-compatible additive change.
+| Package | What lives here |
+| --- | --- |
+| `internal/config` | Environment-based config + validation at startup. |
+| `internal/db` | `pgxpool` wrapper, embedded SQL migrations (`internal/db/migrations/*.sql`), and the `OrgsRepo` / `TemplatesRepo` / `SessionsRepo` repositories. |
+| `internal/auth` | Logto JWT verification against the IdP JWKS (`lestrrat-go/jwx/v3`, cached + auto-refreshed), request-scoped identity injection, and the provisioning middleware that auto-creates the first admin. |
+| `internal/fly` | Thin clients for the Fly Machines REST API (machines + volumes) and the Fly Apps REST API (app creation + image build). All behind interfaces for testability. |
+| `internal/service` | The orchestrator: maps a session request into Fly App + volume + machine provisioning, writes resource ids back to the DB, handles resume/hibernate/delete + template builds, and enforces org-scoped ownership. |
+| `internal/api` | HTTP handlers, routing (`chi`), CORS, and error mapping. |
+| `cmd/api` | Entry point: wires dependencies, runs migrations, starts the server. |
 
-When working on the API:
-- Keep the public protocol in `api/proto` backward-compatible unless you're intentionally cutting a new major version.
-- Add integration tests under `api/internal/.../*_test.go` for any new lifecycle behavior.
-- Avoid introducing state that lives only inside a running container. Durable state belongs in the control plane's stores.
+When working on the backend:
+- **Keep the gatekeeper in the API layer.** Authorization decisions belong in
+  `internal/service` and `internal/api` (resource lookups are scoped by
+  `org_id`; cross-org access returns 404). Do not push auth logic into the
+  database.
+- **Keep Fly access behind interfaces.** `fly.MachinesAPI` and
+  `fly.BuilderAPI` exist so the orchestrator can be unit-tested with mocks. New
+  Fly operations should extend these interfaces and the mock, not call HTTP
+  directly from the service layer.
+- **Migrations are embedded.** Add new migrations as
+  `internal/db/migrations/NNN_name.sql`; they are applied idempotently on boot
+  and tracked in `schema_migrations`. Prefer `CREATE TABLE IF NOT EXISTS`-style
+  idempotent bodies so migrations are safe to re-run.
+- **Add tests.** New orchestration behavior, Fly client operations, and auth
+  claims all require accompanying `_test.go` files using the established fakes
+  (in-memory stores, `mockFly`, a real-RSA test JWKS server).
 
-### Web Interface & UI Plugins
-Location: `web/`
+### Frontend (React + Vite)
+Location: `frontend/`
 
-The dashboard is a standard front-end application, but its distinguishing feature is the **plugin architecture**. Plugins let organizations surface integration-specific details (a custom agent status panel, a vendor-specific action, an internal approval flow) without modifying core.
+The UI is intentionally minimal: authenticate with Logto, then manage
+templates and workspaces. The API client (`src/api.js`) is a thin, hook-free
+module that takes a `getToken` function so it is unit-testable in isolation.
 
-Contributing a UI plugin:
-1. Use the Plugin SDK in `web/sdk` to scaffold a plugin. A plugin is a self-contained module that registers one or more *contributions* (panels, actions, settings tabs, workspace views).
-2. Declare the manifest (id, version, required API version, contributions).
-3. Implement against the stable dashboard extension points only — do not import internal dashboard modules.
-4. Add the plugin under `web/plugins/<your-plugin>` (for built-ins) or distribute it out-of-tree using the SDK.
+When working on the frontend:
+- **No credentials in the browser.** The SPA only ever holds a short-lived
+  Logto access token; it never sees passwords. New API calls must go through
+  `src/api.js` and forward the bearer token.
+- **Keep it lightweight.** Avoid adding heavy state-management or UI-framework
+  dependencies; the MVP deliberately uses React state + a small `useApiData`
+  hook. If you add a dependency, justify it.
+- **Env vars via Vite.** All configuration is read from `import.meta.env` in
+  `src/config.js`; do not introduce build-time secrets into the bundle.
+- `npm run lint` and `npm run build` must pass.
 
-Dashboard core changes (`web/app`) should be additive and avoid breaking the published extension-point contracts. Extension points are versioned; bumping one requires a migration note in `docs/`.
+### Workspace Images (Docker)
+Location: `docker/`
 
-### Workspace Daemon
-Location: `daemon/`
+Workspace images are what a template's Dockerfile produces. The reference image
+(`Dockerfile.codeserver-workspace`) is Ubuntu + Go + `code-server`, running as
+a non-root `dev` user out of a mounted `/workspace`, exposing `:8080`.
 
-The daemon is deliberately small and stable: it must run inside arbitrary agent containers with minimal dependencies. Contributions should keep its footprint low and its surface narrow.
+When contributing workspace images:
+- **The Management API mounts an NVMe Fly Volume at `/workspace`.** Ensure the
+  image creates `/workspace` and the IDE runs out of it; do not bake state into
+  the image.
+- **Expose port 8080** (the platform's configured `WORKSPACE_PORT`). The Fly
+  Proxy forwards to this port and enables scale-to-zero on it.
+- **Run as a non-root user** so files created in the mounted volume are not
+  owned by root.
+- **Auth is handled by the Fly Proxy / Management API layer.** Disable
+  in-editor auth (`code-server --auth none`) so the network boundary controls
+  access; the workspace URL is the perimeter.
 
-Responsibilities of the daemon:
-- Maintain the control channel to the API Layer.
-- Spawn and supervise agent harness processes.
-- Report local state (process health, resource usage, agent events) to the control plane.
-- Expose local hooks for lifecycle events.
+### Ops & Deployment
+Location: `Makefile`, `backend/fly.toml`, `backend/Dockerfile`,
+`backend/.env.example`, `frontend/.env.example`
 
-When contributing to the daemon:
-- Do **not** add heavyweight dependencies. Anything that bloats the in-container image is a regression.
-- All control-plane communication must be outbound and authenticated; never assume inbound network access to the workspace.
-- New lifecycle hooks should be opt-in and declared in the workspace spec by the templating engine.
-- Keep the daemon agnostic of any specific harness — harness-specific logic belongs in the harness package or the harness integration, not the daemon core.
-
-### Workspace Templating Engine
-Location: `templating/`
-
-Templating is responsible for producing a *resolved* workspace spec from:
-- An **organization-level template** (the source of truth for tooling, image, defaults).
-- **Developer preferences/overrides** (allowed to tweak a constrained subset).
-- The **requested repository list**.
-
-Merging semantics are intentional and order-sensitive: org defaults apply first, developer overrides apply second, and only a vetted subset of fields is overridable. This lets organizations enforce standards while keeping per-developer ergonomics.
-
-Contributing here:
-- Changes to the merge precedence or the set of overridable fields are breaking changes and require a version bump plus a docs update.
-- Add a templating test for every new overridable field, asserting both the org-default and developer-override cases.
-- Keep templates declarative and serializable (no executable code in templates).
-
-### Repository Synchronization
-Location: `reposync/`
-
-Repo sync guarantees deterministic workspace initialization. The non-goals are: not a Git hosting replacement, not a CI checkout, not a mirror.
-
-Contributing here:
-- New sync strategies (full, shallow, sparse, monorepo subtree) belong under `reposync/strategies`.
-- Every strategy must be reproducible given the same spec: the same refs must produce the same tree, no implicit "latest branch" resolution unless the spec explicitly requests it.
-- Concurrency, retry, and partial-failure behavior must be explicit; a half-initialized workspace is worse than a failed one.
+The `Makefile` documents the full self-host sequence. When changing ops:
+- Keep the verification checklist in `AGENTS.md` accurate — those are the
+  commands CI and contributors rely on.
+- Secrets belong in `.env` / `fly secrets`, never in committed files. The
+  `.env.example` files list the required variables with safe placeholders.
 
 ---
 
-## Agent Harnesses
-Agent harnesses are how the platform talks to AI coding agents. They are documented in full in `agents.md`. At a high level:
+## Agent / IDE Model
 
-- A harness is a discrete integration that knows how to start, drive, and observe a particular AI coding assistant.
-- Harnesses plug into the **Workspace Daemon** via a stable harness interface; the daemon does not know about specific models or assistants.
-- Bundled harnesses live under `harnesses/` (e.g. `harnesses/vscode`). Third-party harnesses can be distributed out-of-tree using the same interface.
+The MVP integrates an **IDE**, not an agent harness: each workspace runs
+`code-server` (open-source VS Code in the browser), and both humans and AI
+coding agents interact through the editor and shell *inside* the workspace. The
+fly Proxy provides the unique, scale-to-zero URL.
 
-To add a new harness, follow `agents.md`, then place the integration under `harnesses/<name>` (bundled) or publish it as a standalone module.
+There is **no in-container daemon or harness abstraction** in the current
+implementation. The earlier daemon/harness design is preserved as a clearly
+labeled future evolution in [`agents.md`](agents.md). Do not write code that
+depends on a daemon process inside workspaces until that direction is adopted.
 
 ---
 
 ## Testing
-- **Unit tests:** per-component, run with `make test-unit`.
-- **Integration tests:** component-pair tests (e.g. daemon ↔ API) run with `make test-integration`.
-- **End-to-end tests:** full stack under `e2e/`, run with `make test-e2e`. These spin up real containers; they require a working container runtime.
 
-Please add tests alongside any change. New public API surfaces, new lifecycle transitions, new harnesses, and new templating fields all require accompanying tests.
+Canonical commands (also in `AGENTS.md`):
+
+```bash
+# Backend — runs offline (fakes for Fly + JWT verification).
+make backend-vet
+make backend-test
+make backend-build
+
+# Frontend.
+make frontend-build
+make frontend-dev      # smoke-test in the browser
+```
+
+- **Backend unit tests** mock the Fly Machines REST API and the Logto JWT
+  verification layer (real RSA keys + a fake JWKS server), so the business logic
+  is verified without external dependencies. Current coverage: orchestrator
+  ~81%, fly client ~74%, auth ~40%.
+- **Frontend** has no dedicated test runner in the MVP; `npm run lint` and a
+  successful `npm run build` are the gates. If you add logic worth testing,
+  introduce a runner (Vitest) and wire it into the lint/build checks.
+- Please add tests alongside any change. New orchestration transitions, Fly
+  operations, auth claims, and handlers all require accompanying tests.
 
 ---
 
 ## Coding Standards
-- Follow the existing style in each component; tooling (formatters + linters) is wired into `make fmt` and `make lint`.
-- Keep functions and modules small and single-purpose.
-- Public API and interface contracts are documented inline; internal helpers need not be.
-- No new dependencies without justification — especially in the daemon, which must stay lightweight.
+- Follow the existing style in each component; formatting and linting are wired
+  into the Makefile / npm scripts.
+- Keep functions and modules small and single-purpose. The Go code uses small
+  interfaces (`db.Executor`, `fly.MachinesAPI`, `fly.BuilderAPI`,
+  `auth.Verifier`, `auth.Provisioner`) — prefer depending on interfaces, not
+  concrete types, especially across package boundaries.
+- Public API and interface contracts are documented inline.
+- No new dependencies without justification. The backend intentionally has a
+  tiny dependency surface (`pgx`, `chi`, `jwx`, `godotenv`, `uuid`).
 - Never commit secrets, credentials, or organization-specific configuration.
 
 ---
 
 ## Pull Request Process
-1. Open an issue or discussion for anything beyond a small fix, so design can be agreed first.
-2. Fork and branch from `main` (or the relevant long-lived branch for a backport).
+1. Open an issue or discussion for anything beyond a small fix, so design can
+   be agreed first.
+2. Fork and branch from `main`.
 3. Keep PRs focused — one layer or one concern per PR where possible.
-4. Ensure `make fmt`, `make lint`, and the relevant test targets pass locally.
-5. Update documentation (`docs/`, `README.md`, `CONTRIBUTING.md`, `agents.md`) for any user- or contributor-visible change.
-6. Add a changelog entry if one is requested in the PR template.
-7. Mark the PR ready for review; a maintainer from the relevant component area will review.
-
-For interface or protocol changes (Control API, daemon harness interface, UI plugin extension points), call this out explicitly in the PR description so maintainers can assess compatibility.
+4. Ensure the `AGENTS.md` verification checklist passes locally
+   (`backend-vet`, `backend-test`, `backend-build`, `frontend-build`).
+5. Update documentation (`docs/`, `README.md`, `AGENTS.md`, `CONTRIBUTING.md`,
+   `agents.md`) for any user- or contributor-visible change.
+6. Call out interface or protocol changes explicitly (the Management API's REST
+   surface, the Fly client interfaces, the auth claim contract) so maintainers
+   can assess compatibility.
+7. Mark the PR ready for review.
 
 ---
 
 ## Release Process
 - The project uses semantic versioning.
-- Breaking changes to the Control API, daemon harness interface, or UI plugin extension points require a major version bump.
-- Each release publishes container images for the control plane and daemon, a CLI binary, and a changelog.
-- See `docs/release.md` for the detailed runbook (maintainers).
+- Breaking changes to the Management API's REST surface require a major version
+  bump and a migration note in `docs/`.
+- Each release publishes the Management API container image (via `fly deploy`)
+  and a static frontend bundle; the `Makefile` documents the deployment targets.
+- See `docs/ARCHITECTURE.md` for the component responsibilities that a release
+  must keep coherent.
 
 ---
 
-Thank you for helping build a self-hosted, agent-first, multi-repo cloud coding platform.
+Thank you for helping build a self-hosted, lightweight cloud coding sandbox.
