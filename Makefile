@@ -10,9 +10,9 @@ GO            ?= go
 FLY_CLI       ?= fly
 NEON_DB_URL   ?= $(DATABASE_URL)
 FLY_APP       ?= cloudsandbox-api
-FLY_ORG       ?= $(FLY_ORG)
 FLY_REGION    ?= iad
-LOGTO_ISSUER  ?= $(LOGTO_ISSUER)
+# FLY_ORG, LOGTO_ISSUER, DATABASE_URL, FLY_API_TOKEN, FRONTEND_URL are sourced
+# from the environment (or the command line); they have no defaults here.
 
 # ----------------------------------------------------------------------------
 # Local development
@@ -69,21 +69,16 @@ db-migrate-psql: ## Apply schema via psql (requires psql installed)
 # Logto setup checklist
 # ----------------------------------------------------------------------------
 .PHONY: logto-checklist
-logto-checklist: ## Print the Logto setup checklist
-	@echo "Logto setup (perform in the Logto console):"
-	@echo "  1. Create an Application of type 'Traditional Web' / 'SPA'."
-	@echo "     - Redirect URI:        https://<frontend-origin>/callback"
-	@echo "     - Post sign-out URI:    https://<frontend-origin>/"
-	@echo "  2. Create an API Resource (audience), e.g. https://api.cloudsandbox"
-	@echo "     and grant the application access to it."
-	@echo "  3. (Multi-tenant) Create Organizations; add users as members."
-	@echo "  4. Record the following for the backend:"
-	@echo "       LOGTO_ISSUER=<logto origin>"
-	@echo "       LOGTO_AUDIENCE=<resource indicator>"
-	@echo "     and for the frontend:"
-	@echo "       VITE_LOGTO_ENDPOINT=<logto origin>"
-	@echo "       VITE_LOGTO_APP_ID=<app id>"
-	@echo "       VITE_LOGTO_RESOURCE=<resource indicator>"
+logto-checklist: ## Print the Logto setup steps (M2M seed, then logto-setup)
+	@echo "Logto setup:"
+	@echo "  1. In the Logto console, create a 'Machine-to-machine' application."
+	@echo "  2. Assign it the built-in 'Logto Management API' role (scope: all)."
+	@echo "  3. Put its App ID + App Secret in LOGTO_M2M_APP_ID / LOGTO_M2M_APP_SECRET."
+	@echo "  4. Run: ./scripts/deploy.sh logto-setup"
+	@echo "     (creates the SPA app + API resource, writes LOGTO_APP_ID to .env)."
+	@echo "  5. Set the backend env: LOGTO_ISSUER, LOGTO_AUDIENCE."
+	@echo "     The frontend build reads LOGTO_APP_ID automatically."
+	@echo "  6. (Multi-tenant) Create Organizations + members by hand in the console."
 
 # ----------------------------------------------------------------------------
 # Fly.io deployment
