@@ -104,7 +104,10 @@ plane, its UI, and the workspace image recipes.
 - External accounts for integration testing (optional for unit tests):
   - A **Neon** Postgres database (free tier works) — set `DATABASE_URL`.
   - A **Logto** instance (or Logto Cloud) — set the `LOGTO_*` vars.
-  - A **Fly.io** account + API token — set `FLY_API_TOKEN` and `FLY_ORG`.
+  - A **Fly.io** account: `fly auth login`, pick an org (`fly orgs list` or
+    `fly orgs create <name>`) and set `FLY_ORG`. An API token
+    (`fly tokens create` → `FLY_API_TOKEN`) is optional for the deploy step
+    (auto-derived from your login) but recommended for non-interactive/CI.
 - A container runtime (Docker) only if you want to build/run the reference
   workspace image locally.
 

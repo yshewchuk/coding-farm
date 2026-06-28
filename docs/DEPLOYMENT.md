@@ -26,7 +26,14 @@ idempotent — safe to re-run; each step guards its precondition.
 
 ## Prerequisites
 
-- The **`fly` CLI** (`flyctl`), authenticated (`fly auth login`).
+- The **`fly` CLI** (`flyctl`), authenticated:
+  ```bash
+  fly auth login
+  ```
+  A personal Fly.io organization is auto-created when you sign up. List yours
+  with `fly orgs list`, or create a dedicated one (recommended — keeps billing
+  isolated) with `fly orgs create <name>`. Use that slug as `FLY_ORG`.
+  > A new Fly org needs a payment method attached before it can run machines.
 - **`jq`** and **`curl`** (used by the script for Logto setup + idempotency checks).
 - **`npm`/Node 20+** (frontend build).
 - A **Neon** account + API key (if you want the script to create the DB; otherwise just grab a connection string from the Neon console).
@@ -72,9 +79,14 @@ origin or audience changes.
 
 ### Fly + Neon
 ```bash
-fly auth login
-fly tokens create   # if you need a long-lived token for the script
+fly auth login          # required; flyctl uses this for the deploy step
+fly orgs list           # pick an org slug (or create one: fly orgs create <name>)
+fly tokens create       # optional: only for non-interactive/CI redeploys (set FLY_API_TOKEN)
 ```
+> The deploy step does **not** require `FLY_API_TOKEN`: flyctl uses its login
+> session to create/deploy the app. The script still sets a token as a runtime
+> **secret** (the deployed Management API needs one to call the Fly Machines
+> REST API) — when `FLY_API_TOKEN` is unset it is derived from `fly auth token`.
 
 ---
 
@@ -93,7 +105,7 @@ Required values:
 | Var | Meaning |
 | --- | --- |
 | `FLY_ORG` | Your Fly.io org slug. |
-| `FLY_API_TOKEN` | A Fly API token (`fly tokens create`). |
+| `FLY_API_TOKEN` | A Fly API token (`fly tokens create`). **Optional** for the deploy step — flyctl uses its login; the script derives one from `fly auth token` when unset and sets it as a runtime secret. Set it explicitly for non-interactive/CI redeploys. |
 | `DATABASE_URL` | Neon Postgres connection string. **Leave blank** to let the script create the project via `neonctl`. |
 | `LOGTO_ISSUER` | Logto origin (e.g. `https://your-tenant.logto.app`). |
 | `LOGTO_AUDIENCE` | The API resource indicator (audience) the backend validates. |
