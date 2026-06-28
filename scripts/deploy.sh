@@ -73,15 +73,35 @@ preflight() {
   section "Preflight"
   need_cmd fly
   need_cmd jq
-  require_env FLY_ORG "your Fly.io org slug"
-  require_env FLY_API_TOKEN "fly auth token; or run 'fly tokens create'"
+  require_env FLY_ORG "your Fly.io org slug (run 'fly orgs list'; create one with 'fly orgs create')"
   require_env LOGTO_ISSUER "e.g. https://your-tenant.logto.app"
   validate_origin "$LOGTO_ISSUER"
   require_env DATABASE_URL "run 'scripts/deploy.sh neon-create' or paste it from the Neon console"
   require_env LOGTO_AUDIENCE "the Logto API resource indicator"
   require_env FRONTEND_URL "the deployed frontend origin, e.g. https://app.example.com"
   validate_origin "$FRONTEND_URL"
+  # FLY_API_TOKEN is optional for the deploy step (flyctl uses its own login),
+  # but the deployed Management API needs a long-lived token at runtime to call
+  # the Fly Machines REST API. ensure_fly_token derives one when unset.
+  ensure_fly_token
   ok "all required env vars present"
+}
+
+# Ensure FLY_API_TOKEN is set for the runtime secret. If the operator supplied
+# one (recommended for CI / non-interactive deploys) it is used as-is; otherwise
+# we derive a token from the logged-in flyctl session (run 'fly auth login').
+# The deployed app cannot use an interactive login, so a token is always set.
+ensure_fly_token() {
+  if [ -n "${FLY_API_TOKEN:-}" ]; then
+    ok "FLY_API_TOKEN provided; will be set as a runtime secret"
+    return
+  fi
+  if ! fly auth whoami >/dev/null 2>&1; then
+    die "not authenticated to Fly.io. Either run 'fly auth login' or set FLY_API_TOKEN (run 'fly tokens create')."
+  fi
+  FLY_API_TOKEN="$(fly auth token)"
+  export FLY_API_TOKEN
+  warn "FLY_API_TOKEN not set; derived from 'fly auth token' (logged-in session). It is set as a runtime secret but not persisted to .env — set it there for non-interactive redeploys."
 }
 
 # -----------------------------------------------------------------------------
@@ -312,8 +332,11 @@ Commands:
   help            Show this help
 
 Env (via environment or a .env file at repo root):
-  Required: FLY_ORG, FLY_API_TOKEN, LOGTO_ISSUER, DATABASE_URL,
+  Required: FLY_ORG, LOGTO_ISSUER, DATABASE_URL,
             LOGTO_AUDIENCE, FRONTEND_URL
+  Fly auth: run 'fly auth login' (recommended). Set FLY_API_TOKEN only for
+            non-interactive/CI deploys; otherwise it is derived from the
+            logged-in session and still set as a runtime secret.
   Seed (once, for logto-setup): LOGTO_M2M_APP_ID, LOGTO_M2M_APP_SECRET
   Auto-set by logto-setup: LOGTO_APP_ID
   Optional: FLY_APP (default cloudsandbox-api), NEON_REGION, NEON_PROJECT_NAME,

@@ -13,6 +13,10 @@ FLY_APP       ?= cloudsandbox-api
 FLY_REGION    ?= iad
 # FLY_ORG, LOGTO_ISSUER, DATABASE_URL, FLY_API_TOKEN, FRONTEND_URL are sourced
 # from the environment (or the command line); they have no defaults here.
+# Note: the canonical deploy path is scripts/deploy.sh (loads .env + derives a
+# Fly token from `fly auth login` when FLY_API_TOKEN is unset). These make
+# targets are a thinner alternative for operators who prefer make; FLY_API_TOKEN
+# must be exported here since make does not load .env.
 
 # ----------------------------------------------------------------------------
 # Local development

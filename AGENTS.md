@@ -63,7 +63,9 @@ story in one auditable, idempotent place. See `docs/DEPLOYMENT.md` for the full
 narrative.
 
 ### Prerequisites (CLIs only)
-- `fly` (flyctl), authenticated: `fly auth login`.
+- `fly` (flyctl), authenticated: `fly auth login`. Pick an org with
+  `fly orgs list` (a personal one is auto-created on signup) or create a
+  dedicated one with `fly orgs create <name>`; use its slug as `FLY_ORG`.
 - `jq` (idempotency checks in the script).
 - `npm`/Node 20+ (frontend build).
 - `neonctl` **optional** — only if you want the script to create the Neon
@@ -72,8 +74,10 @@ narrative.
 
 ### One-time setup
 - Create a `.env` at the repo root from `.env.example` and fill in `FLY_ORG`,
-  `FLY_API_TOKEN`, `LOGTO_ISSUER`, `LOGTO_AUDIENCE`, `FRONTEND_URL`
-  (leave `DATABASE_URL` blank to auto-create via `neonctl`).
+  `LOGTO_ISSUER`, `LOGTO_AUDIENCE`, `FRONTEND_URL` (leave `DATABASE_URL` blank
+  to auto-create via `neonctl`). `FLY_API_TOKEN` is optional for the deploy
+  step (flyctl uses its login); the script derives one from `fly auth token`
+  and sets it as a runtime secret. Set it explicitly only for non-interactive/CI.
 - Create one "Machine-to-machine" app in the Logto console, grant it the built-in
   "Logto Management API" role, and put its id/secret in `LOGTO_M2M_APP_ID` /
   `LOGTO_M2M_APP_SECRET`. Then run `./scripts/deploy.sh logto-setup` — it

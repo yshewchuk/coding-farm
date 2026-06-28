@@ -66,7 +66,10 @@ docker/     Reference code-server workspace Dockerfile
 - Node 20+
 - A Neon Postgres database (free tier works) — set `DATABASE_URL`
 - A Logto instance — set the `LOGTO_*` vars
-- A Fly.io account + API token — set `FLY_API_TOKEN` and `FLY_ORG`
+- A Fly.io account; `fly auth login` and pick an org (`fly orgs list`, or
+  create one with `fly orgs create <name>`) — set `FLY_ORG`. An API token
+  (`fly tokens create` → `FLY_API_TOKEN`) is optional for the deploy step
+  (it's auto-derived from your login) but required for non-interactive/CI.
 
 ### 1. Backend
 ```bash
