@@ -17,9 +17,10 @@ ARG NODE_VERSION=20
 FROM node:${NODE_VERSION}-bookworm AS builder
 WORKDIR /src
 
-# Cache deps first.
+# Cache deps first. Use `npm ci` for a reproducible install when a lockfile
+# is present; fall back to `npm install` (which generates one) otherwise.
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 COPY . .
 
