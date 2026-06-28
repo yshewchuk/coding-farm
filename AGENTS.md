@@ -92,14 +92,16 @@ narrative.
 ./scripts/deploy.sh logto         # print the one-time Logto M2M seed checklist
 ./scripts/deploy.sh logto-setup   # create/update SPA app + API resource (sets LOGTO_APP_ID)
 ./scripts/deploy.sh fly            # create/secret/deploy the Management API
-./scripts/deploy.sh frontend      # build frontend/dist/ with env baked in
+./scripts/deploy.sh web            # deploy the frontend as a static-host Fly app
+./scripts/deploy.sh frontend      # build frontend/dist/ locally (host anywhere)
 make deploy                         # = ./scripts/deploy.sh all
 ```
 
 ### Notes
-- The Management API app is the only Fly app you deploy. Each workspace session
-  is a **separate** Fly app/machine provisioned on demand by the API at runtime
-  via the Fly Machines REST API.
+- You deploy **two** Fly apps via this script: the Management API
+  (`cloudsandbox-api`) and the frontend static host (`cloudsandbox-web`, nginx
+  + SPA fallback). Each workspace session is a **separate** Fly app/machine
+  provisioned on demand by the API at runtime via the Fly Machines REST API.
 - Migrations run automatically on boot (`internal/db.Migrate`); the backend logs
   `database migrated` then `http server starting`.
 - The script is idempotent: `all` can be re-run safely after fixing a failing

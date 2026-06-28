@@ -1,0 +1,31 @@
+# fly.toml for the Cloud Sandbox static host (the Management UI).
+#
+# This is a *separate* Fly app from the Management API (cloudsandbox-api). The
+# browser loads this static bundle and calls the API over its own origin
+# (VITE_API_BASE, baked into the bundle at build time). It needs no secrets and
+# no database — only a single shared-vm process serving nginx on :8080.
+
+app = "cloudsandbox-web"
+primary_region = "iad"
+
+# Build context is the repo root (deploy is run from $ROOT), so the Dockerfile
+# path is relative to the root.
+[build]
+  dockerfile = "docker/Dockerfile.frontend"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The UI is stateless and cheap; scale to zero and wake on request.
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

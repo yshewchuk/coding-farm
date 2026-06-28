@@ -2,7 +2,7 @@
 
 This guide describes how to self-host the Cloud Sandbox platform with nothing
 but CLIs and one helper script. There is **no Terraform** — the infra surface is
-small enough (one Neon project, one Logto app, one Fly app) that a shell script
+small enough (one Neon project, one Logto app, two Fly apps) that a shell script
 is clearer and avoids the archived Fly Terraform provider.
 
 Everything is driven by [`scripts/deploy.sh`](../scripts/deploy.sh), which is
@@ -15,12 +15,12 @@ idempotent — safe to re-run; each step guards its precondition.
 | **Postgres** | Neon Serverless (scale-to-zero compute) | `neonctl` via the script (optional), or supply `DATABASE_URL` |
 | **Identity** | Logto (OIDC IdP) | One M2M app created by hand, then `logto-setup` automates the SPA app + API resource |
 | **Control plane** | Go Management API on Fly.io | `flyctl` via the script (create app → set secrets → deploy) |
-| **Frontend** | React + Vite static bundle | `npm run build` via the script; deploy `dist/` to any static host |
+| **Frontend** | React + Vite static bundle, served by nginx | `flyctl` via the script: builds the bundle and deploys its own static-host Fly app (default `cloudsandbox-web`) |
 
 > The Management API itself calls the Fly Machines REST API at runtime to
 > provision per-session workspace machines — that code is the single source of
-> truth for Fly integration. The only Fly app you deploy here is the control
-> plane.
+> truth for Fly integration. You deploy **two** Fly apps: the control plane
+> (`cloudsandbox-api`) and the static frontend host (`cloudsandbox-web`).
 
 ---
 
@@ -123,7 +123,7 @@ Optional: `FLY_APP` (default `cloudsandbox-api`), `NEON_REGION`,
 
 ```bash
 # Full flow (creates Neon if DATABASE_URL is unset, runs logto-setup when M2M
-# seed vars are present, deploys the API to Fly, builds the frontend bundle).
+# seed vars are present, deploys the API AND the frontend to Fly).
 ./scripts/deploy.sh all
 ```
 
@@ -135,12 +135,19 @@ Or run individual steps:
 ./scripts/deploy.sh logto         # print the one-time Logto M2M seed checklist
 ./scripts/deploy.sh logto-setup   # create/update the SPA app + API resource (sets LOGTO_APP_ID)
 ./scripts/deploy.sh fly            # create/secret/deploy the Management API
-./scripts/deploy.sh frontend      # build frontend/dist/ with env baked in
+./scripts/deploy.sh web            # deploy the frontend as a static-host Fly app
+./scripts/deploy.sh frontend      # build frontend/dist/ locally (host anywhere; optional)
 ```
 
 On success, the Management API is live at `https://<FLY_APP>.fly.dev` (migrations
-run automatically on boot — the backend logs `database migrated`). The frontend
-bundle is in `frontend/dist/`; deploy it to any static host at `FRONTEND_URL`.
+run automatically on boot — the backend logs `database migrated`) and the
+frontend is live at `https://<FLY_WEB_APP>.fly.dev` (default
+`cloudsandbox-web`). To use a custom domain, point it at the web app and add the
+origin to Logto's SPA redirect URIs.
+
+> Prefer your own static host (Cloudflare Pages, Netlify, S3, …)? Run
+> `./scripts/deploy.sh frontend` instead of `web` — it builds `frontend/dist/`
+> with the Vite env baked in for you to ship anywhere.
 
 ---
 
@@ -153,14 +160,12 @@ bundle is in `frontend/dist/`; deploy it to any static host at `FRONTEND_URL`.
                      │
    ┌─────────────────┼──────────────────┐
    ▼                 ▼                  ▼
-neonctl          flyctl                npm
-(creates DB)     (app+secrets+deploy)  (builds bundle)
+neonctl          flyctl                flyctl
+(creates DB)    (API: app+secrets     (web: builds bundle +
+                  +deploy)             nginx deploy)
    │                 │                  │
    ▼                 ▼                  ▼
-DATABASE_URL   <app>.fly.dev        frontend/dist/
-                                     │
-                                     ▼
-                          you push dist/ to a static host
+DATABASE_URL   <app>.fly.dev        <web-app>.fly.dev
 ```
 
 Logto is the one manual piece: create the M2M seed app once in the console,

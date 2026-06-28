@@ -94,8 +94,12 @@ fly: ## Create + secret + deploy the Management API to Fly.io (idempotent)
 	./scripts/deploy.sh fly
 
 .PHONY: deploy
-deploy: ## Full flow: neon (if needed) -> logto -> fly -> frontend build
+deploy: ## Full flow: neon (if needed) -> logto -> fly -> web
 	./scripts/deploy.sh all
+
+.PHONY: web
+web: ## Deploy the frontend as a static-host Fly app (nginx + SPA fallback)
+	./scripts/deploy.sh web
 
 .PHONY: fly-app
 fly-app: ## (Deprecated) alias for `make fly` — the script creates the app if missing
@@ -133,7 +137,8 @@ bootstrap: ## Print the end-to-end self-host bootstrap steps
 	@echo "  2. cp .env.example .env; fill FLY_ORG, LOGTO_ISSUER, LOGTO_AUDIENCE,"
 	@echo "     FRONTEND_URL (leave DATABASE_URL blank to auto-create via neonctl)."
 	@echo "  3. Seed one Logto M2M app (console) -> LOGTO_M2M_APP_ID/SECRET in .env."
-	@echo "  4. make fly                # = ./scripts/deploy.sh fly: create+secret+deploy"
-	@echo "     (or) ./scripts/deploy.sh all   # neon -> logto -> fly -> frontend build"
-	@echo "  5. Deploy frontend/dist/ to a static host; set VITE_* env vars."
+	@echo "  4. make fly                # = ./scripts/deploy.sh fly: create+secret+deploy API"
+	@echo "     make web                  # = ./scripts/deploy.sh web: static-host Fly app"
+	@echo "     (or) ./scripts/deploy.sh all   # neon -> logto -> fly -> web"
+	@echo "  5. (Optional) point a custom domain at the web app; add to Logto redirects."
 	@echo "  6. Sign in, create a template, build it, launch a workspace, Open IDE."
