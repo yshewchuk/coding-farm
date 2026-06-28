@@ -1,0 +1,15 @@
+# Keep the Docker build context lean: npm ci reinstalls deps from package.json,
+# and the Vite build regenerates dist/. Exclude local artifacts, caches, and env
+# files so they neither bloat the upload nor leak into the image.
+node_modules
+dist
+.vite
+.env
+.env.*
+!.env.example
+*.local
+npm-debug.log*
+.DS_Store
+.git
+.gitignore
+fly.toml

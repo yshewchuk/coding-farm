@@ -384,9 +384,10 @@ web_deploy() {
     ok "Fly app '$web_app' already exists"
   fi
 
-  # Build + deploy remotely on Fly's builder. VITE_* are baked into the bundle
-  # at build time; the runtime container needs no secrets.
-  fly deploy "$ROOT" --config "$ROOT/frontend/fly.toml" --app "$web_app" --remote-only \
+  # Build + deploy remotely on Fly's builder. Build context is frontend/ (where
+  # the Dockerfile + nginx.conf live); VITE_* are baked into the bundle at build
+  # time, so the runtime container needs no secrets.
+  fly deploy "$ROOT/frontend" --config "$ROOT/frontend/fly.toml" --app "$web_app" --remote-only \
     --build-arg "VITE_API_BASE=$api_url" \
     --build-arg "VITE_LOGTO_ENDPOINT=$LOGTO_ISSUER" \
     --build-arg "VITE_LOGTO_APP_ID=$LOGTO_APP_ID" \
