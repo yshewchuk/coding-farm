@@ -8,10 +8,11 @@
 app = "cloudsandbox-web"
 primary_region = "iad"
 
-# Build context is the repo root (deploy is run from $ROOT), so the Dockerfile
-# path is relative to the root.
+# Build context is the frontend/ directory (deploy runs from $ROOT with
+# `fly deploy $ROOT/frontend --config frontend/fly.toml`); the Dockerfile path
+# is relative to that context.
 [build]
-  dockerfile = "docker/Dockerfile.frontend"
+  dockerfile = "Dockerfile.frontend"
 
 [http_service]
   internal_port = 8080
