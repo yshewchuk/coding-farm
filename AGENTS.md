@@ -72,17 +72,21 @@ narrative.
 
 ### One-time setup
 - Create a `.env` at the repo root from `.env.example` and fill in `FLY_ORG`,
-  `FLY_API_TOKEN`, `LOGTO_ISSUER`, `LOGTO_AUDIENCE`, `FRONTEND_URL`,
-  `LOGTO_APP_ID` (leave `DATABASE_URL` blank to auto-create via `neonctl`).
-- Do the one-time Logto console setup (SPA app + API resource) the script
-  prints a checklist for (`./scripts/deploy.sh logto`).
+  `FLY_API_TOKEN`, `LOGTO_ISSUER`, `LOGTO_AUDIENCE`, `FRONTEND_URL`
+  (leave `DATABASE_URL` blank to auto-create via `neonctl`).
+- Create one "Machine-to-machine" app in the Logto console, grant it the built-in
+  "Logto Management API" role, and put its id/secret in `LOGTO_M2M_APP_ID` /
+  `LOGTO_M2M_APP_SECRET`. Then run `./scripts/deploy.sh logto-setup` — it
+  creates the SPA app + API resource idempotently and writes `LOGTO_APP_ID` to
+  `.env` (the manual SPA/resource steps are no longer needed).
 
 ### Deploy commands
 ```bash
-./scripts/deploy.sh all           # neon (if needed) -> fly -> frontend build
+./scripts/deploy.sh all           # neon (if needed) -> logto -> fly -> frontend build
 ./scripts/deploy.sh preflight     # validate env + tools
 ./scripts/deploy.sh neon-create   # create a Neon project (sets DATABASE_URL)
-./scripts/deploy.sh logto         # print the one-time Logto console checklist
+./scripts/deploy.sh logto         # print the one-time Logto M2M seed checklist
+./scripts/deploy.sh logto-setup   # create/update SPA app + API resource (sets LOGTO_APP_ID)
 ./scripts/deploy.sh fly            # create/secret/deploy the Management API
 ./scripts/deploy.sh frontend      # build frontend/dist/ with env baked in
 make deploy                         # = ./scripts/deploy.sh all

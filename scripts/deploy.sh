@@ -110,30 +110,126 @@ neon_create() {
 }
 
 # -----------------------------------------------------------------------------
-# Step 2: Logto setup (manual; chicken-and-egg)
+# Step 2: Logto setup
 # -----------------------------------------------------------------------------
+# Logto's Management API authenticates with a machine-to-machine (M2M)
+# client_credentials token. The M2M app must be created by hand once (Logto
+# cannot manage its own management credentials) and granted the built-in
+# "Logto Management API" role (scope `all`). After that seed step, `logto-setup`
+# creates/updates the SPA application + API resource idempotently via the API.
 logto_checklist() {
-  head "Logto (manual one-time setup)"
+  head "Logto (one-time M2M seed)"
   cat <<EOF
-Logto cannot be created by this script (it needs its own credentials to talk to
-its own API). Do this once in the Logto console:
+Logto's Management API needs machine credentials to manage itself, so create
+one M2M app by hand (once). Then 'scripts/deploy.sh logto-setup' automates the
+rest (SPA app + API resource).
 
-  1. Create an Application of type "SPA":
-       - Redirect URI:        ${FRONTEND_URL}/callback
-       - Post sign-out URI:    ${FRONTEND_URL}
-       - CORS allowed origins: ${FRONTEND_URL}
-     -> copy its App ID into LOGTO_APP_ID / VITE_LOGTO_APP_ID.
-  2. Create an API Resource with indicator = ${LOGTO_AUDIENCE}
-     and grant the SPA access to it.
-  3. (Multi-tenant only) Create Organizations; add users as members.
-     The API reads the org id from the LOGTO_ORG_CLAIM (default: organization_id).
+  1. In the Logto console, create a "Machine-to-machine" application.
+  2. Assign it the built-in "Logto Management API" role (scope: all).
+     New tenants ship with a pre-configured "Logto Management API access" role.
+  3. Copy its App ID + App Secret into .env:
+       LOGTO_M2M_APP_ID=<m2m app id>
+       LOGTO_M2M_APP_SECRET=<m2m app secret>
 
-Then set these env vars (already required by preflight):
-  LOGTO_ISSUER=${LOGTO_ISSUER}
-  LOGTO_AUDIENCE=${LOGTO_AUDIENCE}
-  LOGTO_APP_ID=<SPA app id>
+Then run:
+  ./scripts/deploy.sh logto-setup
+
+This creates the SPA app (redirect ${FRONTEND_URL}/callback, CORS ${FRONTEND_URL})
+and the API resource (indicator ${LOGTO_AUDIENCE}), and writes LOGTO_APP_ID back
+to .env. Multi-tenant Organizations/members remain a manual step in the console.
 EOF
-  ok "Logto checklist printed"
+  ok "Logto M2M seed checklist printed"
+}
+
+# Fetch an M2M access token for the Logto Management API; export M2M_TOKEN.
+logto_m2m_token() {
+  require_env LOGTO_M2M_APP_ID "the M2M app id (see 'scripts/deploy.sh logto')"
+  require_env LOGTO_M2M_APP_SECRET "the M2M app secret (see 'scripts/deploy.sh logto')"
+  local resp token
+  resp="$(curl -sS -X POST "${LOGTO_ISSUER}/oidc/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode "grant_type=client_credentials" \
+    --data-urlencode "client_id=${LOGTO_M2M_APP_ID}" \
+    --data-urlencode "client_secret=${LOGTO_M2M_APP_SECRET}" \
+    --data-urlencode "resource=${LOGTO_ISSUER}/api" \
+    --data-urlencode "scope=all")"
+  token="$(printf '%s' "$resp" | jq -r '.access_token // empty')"
+  [ -n "$token" ] || die "could not fetch M2M token from Logto: ${resp}"
+  export M2M_TOKEN="$token"
+  ok "M2M access token acquired (valid ~1h)"
+}
+
+# logto_api METHOD PATH [BODY] -> prints response body; non-zero on HTTP >= 400.
+logto_api() {
+  local method="$1" path="$2" body="${3:-}" resp code
+  resp="$(curl -sS -w '\n%{http_code}' -X "$method" "${LOGTO_ISSUER}${path}" \
+    -H "Authorization: Bearer ${M2M_TOKEN}" \
+    -H "Content-Type: application/json" \
+    ${body:+-d "$body"})"
+  code="$(printf '%s' "$resp" | tail -n1)"
+  printf '%s' "$resp" | sed '$d'
+  if [ "${code:-500}" -ge 400 ] 2>/dev/null; then
+    err "Logto ${method} ${path} -> HTTP ${code}"
+    return 1
+  fi
+  return 0
+}
+
+logto_setup() {
+  head "Logto setup (SPA app + API resource)"
+  need_cmd curl
+  need_cmd jq
+  require_env LOGTO_ISSUER "e.g. https://your-tenant.logto.app"
+  validate_origin "$LOGTO_ISSUER"
+  require_env LOGTO_AUDIENCE "the API resource indicator, e.g. https://api.example.com"
+  require_env FRONTEND_URL "the deployed frontend origin"
+  validate_origin "$FRONTEND_URL"
+
+  logto_m2m_token
+
+  local spa_name="${LOGTO_SPA_APP_NAME:-Cloud Sandbox}" res_id app_id spa_body
+
+  # --- API resource (indicator = LOGTO_AUDIENCE); create if missing ---
+  res_id="$(logto_api GET "/api/resources" | jq -r --arg i "$LOGTO_AUDIENCE" \
+    '.[] | select(.indicator == $i) | .id' | head -n1 || true)"
+  if [ -n "$res_id" ]; then
+    ok "API resource '${LOGTO_AUDIENCE}' exists (id ${res_id})"
+  else
+    res_id="$(logto_api POST "/api/resources" \
+      "$(jq -nc --arg n "${spa_name} API" --arg i "$LOGTO_AUDIENCE" '{name:$n,indicator:$i}')" \
+      | jq -r '.id' || true)"
+    [ -n "$res_id" ] || die "failed to create API resource '${LOGTO_AUDIENCE}'"
+    ok "created API resource '${LOGTO_AUDIENCE}' (id ${res_id})"
+  fi
+
+  # --- SPA application; create or re-sync redirect/CORS to FRONTEND_URL ---
+  app_id="$(logto_api GET "/api/applications" | jq -r --arg n "$spa_name" \
+    '.[] | select(.name == $n and .type == "SPA") | .id' | head -n1 || true)"
+  spa_body="$(jq -nc \
+    --arg n "$spa_name" \
+    --arg ru "${FRONTEND_URL}/callback" \
+    --arg pr "${FRONTEND_URL}" \
+    --arg co "$FRONTEND_URL" \
+    '{name:$n,type:"SPA",isThirdParty:false,
+      oidcClientMetadata:{redirectUris:[$ru],postLogoutRedirectUris:[$pr]},
+      customClientMetadata:{corsAllowedOrigins:[$co]}}')"
+  if [ -n "$app_id" ]; then
+    logto_api PATCH "/api/applications/${app_id}" "$spa_body" >/dev/null \
+      || die "failed to update SPA app '${spa_name}'"
+    ok "SPA app '${spa_name}' exists (id ${app_id}); synced redirect/CORS"
+  else
+    app_id="$(logto_api POST "/api/applications" "$spa_body" | jq -r '.id' || true)"
+    [ -n "$app_id" ] || die "failed to create SPA app '${spa_name}'"
+    ok "created SPA app '${spa_name}' (id ${app_id})"
+  fi
+
+  # Persist + export LOGTO_APP_ID so the frontend build step can use it.
+  export LOGTO_APP_ID="$app_id"
+  if [ -f "$ENV_FILE" ] && ! grep -q '^LOGTO_APP_ID=' "$ENV_FILE"; then
+    printf 'LOGTO_APP_ID=%q\n' "$app_id" >> "$ENV_FILE"
+    ok "wrote LOGTO_APP_ID to $ENV_FILE"
+  fi
+  ok "LOGTO_APP_ID=${app_id}"
 }
 
 # -----------------------------------------------------------------------------
@@ -205,16 +301,19 @@ Commands:
   all             Run neon (optional) -> logto -> fly -> frontend (default)
   preflight       Check required env vars + tools
   neon-create     Create a Neon project with neonctl (sets DATABASE_URL)
-  logto           Print the one-time Logto console checklist
+  logto           Print the one-time Logto M2M seed checklist
+  logto-setup     Create/update the Logto SPA app + API resource (sets LOGTO_APP_ID)
   fly             Create/secret/deploy the Management API app on Fly.io
   frontend        Build the React bundle with env baked in
   help            Show this help
 
 Env (via environment or a .env file at repo root):
   Required: FLY_ORG, FLY_API_TOKEN, LOGTO_ISSUER, DATABASE_URL,
-            LOGTO_AUDIENCE, FRONTEND_URL, LOGTO_APP_ID
+            LOGTO_AUDIENCE, FRONTEND_URL
+  Seed (once, for logto-setup): LOGTO_M2M_APP_ID, LOGTO_M2M_APP_SECRET
+  Auto-set by logto-setup: LOGTO_APP_ID
   Optional: FLY_APP (default cloudsandbox-api), NEON_REGION, NEON_PROJECT_NAME,
-            ENV_FILE (default ./backend/.env or ./.env)
+            LOGTO_SPA_APP_NAME (default "Cloud Sandbox"), ENV_FILE
 
 The script is idempotent: each step guards its precondition, so 'all' can be
 re-run safely after fixing a failing step.
@@ -237,7 +336,11 @@ case "$cmd" in
       fi
     fi
     preflight
-    logto_checklist
+    if [ -n "${LOGTO_M2M_APP_ID:-}" ] && [ -n "${LOGTO_M2M_APP_SECRET:-}" ]; then
+      logto_setup
+    else
+      logto_checklist
+    fi
     api_url="$(fly_deploy)"
     frontend_build "$api_url"
     head "Done"
@@ -245,7 +348,8 @@ case "$cmd" in
     ;;
   preflight)    preflight ;;
   neon-create)  neon_create ;;
-  logto)        load_env; require_env FRONTEND_URL; require_env LOGTO_AUDIENCE; logto_checklist ;;
+  logto)        load_env; require_env LOGTO_ISSUER; require_env FRONTEND_URL; require_env LOGTO_AUDIENCE; logto_checklist ;;
+  logto-setup)  load_env; logto_setup ;;
   fly)          preflight; fly_deploy ;;
   frontend)     preflight; frontend_build ;;
   help|-h|--help) usage ;;
