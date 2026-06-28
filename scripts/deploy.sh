@@ -108,11 +108,43 @@ ensure_fly_token() {
 # as-is; otherwise we try to create a Neon project with neonctl and persist it
 # back to .env. Called from preflight so every command (all/fly/frontend) gets
 # the same auto-create fallback — not just `all`.
+#
+# When .env was loaded but DATABASE_URL still parsed empty, point the operator
+# at the exact line + cause instead of a generic "required" error. The common
+# traps are: a blank `DATABASE_URL=`, or an inline `#` comment right after `=`
+# that bash parses as empty (e.g. `DATABASE_URL= # from neon console`).
 ensure_database_url() {
   [ -n "${DATABASE_URL:-}" ] && return
   if command -v neonctl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     neon_create
     return
+  fi
+  if [ -f "$ENV_FILE" ]; then
+    local line ln val
+    line="$(grep -nE '^[[:space:]]*DATABASE_URL=' "$ENV_FILE" | head -n1 || true)"
+    if [ -n "$line" ]; then
+      ln="${line%%:*}"
+      val="${line#*DATABASE_URL=}"   # everything after the first DATABASE_URL=
+      if printf '%s\n' "$val" | grep -qE '^[[:space:]]*#'; then
+        die "DATABASE_URL is blanked by an inline '#' comment in $ENV_FILE (line $ln):
+    ${line#*:}
+Put the connection string BEFORE any '#', e.g.:
+    DATABASE_URL=postgres://user:password@ep-xxx.neon.tech/db?sslmode=require  # optional note
+(or run 'scripts/deploy.sh neon-create' with neonctl installed to auto-create one)."
+      fi
+      if printf '%s\n' "$val" | grep -qE '^[[:space:]]*$'; then
+        die "DATABASE_URL is blank in $ENV_FILE (line $ln). Paste your Neon connection string, e.g.:
+    DATABASE_URL=postgres://user:password@ep-xxx.neon.tech/db?sslmode=require
+(or run 'scripts/deploy.sh neon-create' with neonctl installed to auto-create one)."
+      fi
+      # The line has a non-empty value but it parsed to empty: usually a '$'
+      # in the value referencing an undefined variable.
+      die "DATABASE_URL in $ENV_FILE (line $ln) parsed to an empty value:
+    ${line#*:}
+This usually means the value contains a '\$' referencing an undefined variable.
+Single-quote the value (so '\$' is literal) or remove the '\$', e.g.:
+    DATABASE_URL='postgres://user:password@ep-xxx.neon.tech/db?sslmode=require'"
+    fi
   fi
   die "DATABASE_URL is not set. Either:
   - run 'scripts/deploy.sh neon-create' (requires neonctl + a NEON_API_KEY), or
