@@ -191,7 +191,7 @@ logto_setup() {
 
   # --- API resource (indicator = LOGTO_AUDIENCE); create if missing ---
   res_id="$(logto_api GET "/api/resources" | jq -r --arg i "$LOGTO_AUDIENCE" \
-    '.[] | select(.indicator == $i) | .id' | head -n1 || true)"
+    'first(.[] | select(.indicator == $i) | .id) // empty' || true)"
   if [ -n "$res_id" ]; then
     ok "API resource '${LOGTO_AUDIENCE}' exists (id ${res_id})"
   else
@@ -204,7 +204,7 @@ logto_setup() {
 
   # --- SPA application; create or re-sync redirect/CORS to FRONTEND_URL ---
   app_id="$(logto_api GET "/api/applications" | jq -r --arg n "$spa_name" \
-    '.[] | select(.name == $n and .type == "SPA") | .id' | head -n1 || true)"
+    'first(.[] | select(.name == $n and .type == "SPA") | .id) // empty' || true)"
   spa_body="$(jq -nc \
     --arg n "$spa_name" \
     --arg ru "${FRONTEND_URL}/callback" \
