@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 )
 
@@ -87,6 +88,7 @@ func IdentityFromContext(ctx context.Context) (Identity, bool) {
 func RequireIdentity(w http.ResponseWriter, r *http.Request) (Identity, bool) {
 	id, ok := IdentityFromContext(r.Context())
 	if !ok {
+		slog.Info("request missing identity context", "path", r.URL.Path)
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 		return Identity{}, false
 	}
