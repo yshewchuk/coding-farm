@@ -5,9 +5,22 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 )
+
+// errorResponse is the canonical error envelope returned by all handlers.
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
+// writeJSONError writes an error envelope as JSON.
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(errorResponse{Error: msg})
+}
 
 // ctxKey is an unexported type so callers cannot collide with our context keys.
 type ctxKey int
@@ -69,12 +82,12 @@ func IdentityFromContext(ctx context.Context) (Identity, bool) {
 	return id, ok
 }
 
-// RequireIdentity returns the identity from context or writes a 401 and returns
+// RequireIdentity returns the identity from context or writes a 401 JSON response and returns
 // ok=false. This is the helper handlers use at the top of each request.
 func RequireIdentity(w http.ResponseWriter, r *http.Request) (Identity, bool) {
 	id, ok := IdentityFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 		return Identity{}, false
 	}
 	return id, true

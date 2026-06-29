@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"testing"
+
+	"github.com/cloudsandbox/platform/internal/auth"
 )
 
 func TestErrors_AreJSON(t *testing.T) {
@@ -15,5 +17,11 @@ func TestErrors_AreJSON(t *testing.T) {
 	decode(t, rr, &e)
 	if e.Error == "" {
 		t.Error("expected non-empty error message")
+	}
+}
+
+func TestMapError_ErrInvalidToken(t *testing.T) {
+	if got := mapError(auth.ErrInvalidToken); got != http.StatusUnauthorized {
+		t.Errorf("mapError(ErrInvalidToken) = %d, want 401", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/cloudsandbox/platform/internal/auth"
 	"github.com/cloudsandbox/platform/internal/db"
 	"github.com/cloudsandbox/platform/internal/service"
 )
@@ -51,6 +52,8 @@ func mapError(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, service.ErrTemplateNotReady):
 		return http.StatusConflict
+	case errors.Is(err, auth.ErrInvalidToken):
+		return http.StatusUnauthorized
 	default:
 		return http.StatusInternalServerError
 	}
