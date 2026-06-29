@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -18,11 +19,13 @@ func AuthMiddleware(verifier Verifier) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := bearerToken(r)
 			if raw == "" {
+				slog.Info("missing bearer token", "path", r.URL.Path)
 				writeJSONError(w, http.StatusUnauthorized, "missing bearer token")
 				return
 			}
 			claims, err := verifier.Verify(r.Context(), raw)
 			if err != nil {
+				slog.Info("token verification failed", "path", r.URL.Path, "error", err)
 				writeJSONError(w, http.StatusUnauthorized, "invalid token")
 				return
 			}
@@ -56,6 +59,7 @@ func ProvisioningMiddleware(orgs Provisioner) func(http.Handler) http.Handler {
 			}
 			identity, err := resolveIdentity(r.Context(), orgs, claims)
 			if err != nil {
+				slog.Error("identity provisioning failed", "error", err, "subject", claims.Subject, "organization_id", claims.OrganizationID)
 				writeJSONError(w, http.StatusInternalServerError, "identity provisioning failed")
 				return
 			}
