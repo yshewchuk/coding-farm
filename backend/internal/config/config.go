@@ -32,12 +32,12 @@ type Config struct {
 	// FlyRegion is the default Fly region for new machines/volumes.
 	FlyRegion string
 
-	// LogtoIssuer is the Logto endpoint origin (e.g. https://logto.example.com),
+	// LogtoDomain is the Logto endpoint origin (e.g. https://logto.example.com),
 	// WITHOUT the /oidc suffix. Logto's OIDC endpoints all live under
-	// <endpoint>/oidc (issuer claim, JWKS, discovery); that suffix is appended
+	// <domain>/oidc (issuer claim, JWKS, discovery); that suffix is appended
 	// by OIDCIssuer/JWKSURL/OIDCDiscoveryURL so the operator only configures the
 	// bare domain once.
-	LogtoIssuer string
+	LogtoDomain string
 
 	// LogtoJWKSURL is the full JWKS endpoint. If empty it is derived from the issuer.
 	LogtoJWKSURL string
@@ -75,7 +75,7 @@ func Load() (Config, error) {
 		FlyAPIBaseURL:        env("FLY_API_BASE_URL", "https://api.machines.dev"),
 		FlyOrg:               os.Getenv("FLY_ORG"),
 		FlyRegion:            env("FLY_REGION", "iad"),
-		LogtoIssuer:          normalizeLogtoIssuer(os.Getenv("LOGTO_ISSUER")),
+		LogtoDomain:          normalizeLogtoDomain(os.Getenv("LOGTO_DOMAIN")),
 		LogtoJWKSURL:         os.Getenv("LOGTO_JWKS_URL"),
 		LogtoAudience:        os.Getenv("LOGTO_AUDIENCE"),
 		LogtoOrgClaim:        env("LOGTO_ORG_CLAIM", "organization_id"),
@@ -102,8 +102,8 @@ func (c Config) validate() error {
 	if c.FlyOrg == "" {
 		missing = append(missing, "FLY_ORG")
 	}
-	if c.LogtoIssuer == "" {
-		missing = append(missing, "LOGTO_ISSUER")
+	if c.LogtoDomain == "" {
+		missing = append(missing, "LOGTO_DOMAIN")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
@@ -114,7 +114,7 @@ func (c Config) validate() error {
 // OIDCIssuer returns the OIDC issuer URL Logto puts in JWT `iss` claims:
 // <endpoint>/oidc. Used to validate tokens (jwt.WithIssuer).
 func (c Config) OIDCIssuer() string {
-	return c.LogtoIssuer + "/oidc"
+	return c.LogtoDomain + "/oidc"
 }
 
 // JWKSURL returns the JWKS endpoint, deriving it from the issuer when not set
@@ -132,10 +132,10 @@ func (c Config) OIDCDiscoveryURL() string {
 	return c.OIDCIssuer() + "/.well-known/openid-configuration"
 }
 
-// normalizeLogtoIssuer strips a trailing slash and any /oidc suffix so the
+// normalizeLogtoDomain strips a trailing slash and any /oidc suffix so the
 // derived OIDC endpoints (which re-append /oidc) work whether the operator set
 // the bare domain (https://tenant.logto.app) or the full OIDC path.
-func normalizeLogtoIssuer(s string) string {
+func normalizeLogtoDomain(s string) string {
 	s = strings.TrimRight(s, "/")
 	s = strings.TrimSuffix(s, "/oidc")
 	return strings.TrimRight(s, "/")

@@ -37,7 +37,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	slog.Info("config loaded", "region", cfg.FlyRegion, "issuer", cfg.LogtoIssuer)
+	slog.Info("config loaded", "region", cfg.FlyRegion, "domain", cfg.LogtoDomain)
 
 	// --- Database (Neon Postgres master pool) ---
 	pool, err := db.New(ctx, cfg.DatabaseURL)

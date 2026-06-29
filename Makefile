@@ -76,7 +76,7 @@ logto-checklist: ## Print the Logto setup steps (M2M seed, then logto-setup)
 	@echo "  3. Put its App ID + App Secret in LOGTO_M2M_APP_ID / LOGTO_M2M_APP_SECRET."
 	@echo "  4. Run: ./scripts/deploy.sh logto-setup"
 	@echo "     (creates the SPA app + API resource, writes LOGTO_APP_ID to .env)."
-	@echo "  5. Set the backend env: LOGTO_ISSUER, LOGTO_AUDIENCE."
+	@echo "  5. Set the backend env: LOGTO_DOMAIN, LOGTO_AUDIENCE."
 	@echo "     The frontend build reads LOGTO_APP_ID automatically."
 	@echo "  6. (Multi-tenant) Create Organizations + members by hand in the console."
 
@@ -134,7 +134,7 @@ docker-run-workspace: ## Run the sample workspace image locally on :8080
 bootstrap: ## Print the end-to-end self-host bootstrap steps
 	@echo "Self-host bootstrap (one command: ./scripts/deploy.sh all):"
 	@echo "  1. fly auth login; fly orgs list  (or: fly orgs create <name>) -> FLY_ORG"
-	@echo "  2. cp .env.example .env; fill FLY_ORG, LOGTO_ISSUER, LOGTO_AUDIENCE,"
+	@echo "  2. cp .env.example .env; fill FLY_ORG, LOGTO_DOMAIN, LOGTO_AUDIENCE,"
 	@echo "     FRONTEND_URL (leave DATABASE_URL blank to auto-create via neonctl)."
 	@echo "  3. Seed one Logto M2M app (console) -> LOGTO_M2M_APP_ID/SECRET in .env."
 	@echo "  4. make fly                # = ./scripts/deploy.sh fly: create+secret+deploy API"
