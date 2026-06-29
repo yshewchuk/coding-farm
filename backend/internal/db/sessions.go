@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/cloudsandbox/platform/internal/models"
@@ -30,27 +31,39 @@ func (r *SessionsRepo) Create(ctx context.Context, orgID, userID, templateID, na
 		RETURNING id, org_id, user_id, template_id, name, status, fly_machine_id, fly_app_name, fly_volume_id, url, region, created_at, updated_at
 	`
 	var s models.Session
+	var flyMachineID, flyAppName, flyVolumeID, url, region sql.NullString
 	err := r.ex.QueryRow(ctx, q, id, orgID, userID, templateID, name).Scan(
 		&s.ID, &s.OrgID, &s.UserID, &s.TemplateID, &s.Name, &s.Status,
-		&s.FlyMachineID, &s.FlyAppName, &s.FlyVolumeID, &s.URL, &s.Region, &s.CreatedAt, &s.UpdatedAt)
+		&flyMachineID, &flyAppName, &flyVolumeID, &url, &region, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
+	s.FlyMachineID = flyMachineID.String
+	s.FlyAppName = flyAppName.String
+	s.FlyVolumeID = flyVolumeID.String
+	s.URL = url.String
+	s.Region = region.String
 	return &s, nil
 }
 
 // Get returns a session by id, scoped to the owning organization.
 func (r *SessionsRepo) Get(ctx context.Context, orgID, id string) (*models.Session, error) {
 	var s models.Session
+	var flyMachineID, flyAppName, flyVolumeID, url, region sql.NullString
 	err := r.ex.QueryRow(ctx, `
 		SELECT id, org_id, user_id, template_id, name, status, fly_machine_id, fly_app_name, fly_volume_id, url, region, created_at, updated_at
 		FROM sessions WHERE id = $1 AND org_id = $2
 	`, id, orgID).Scan(
 		&s.ID, &s.OrgID, &s.UserID, &s.TemplateID, &s.Name, &s.Status,
-		&s.FlyMachineID, &s.FlyAppName, &s.FlyVolumeID, &s.URL, &s.Region, &s.CreatedAt, &s.UpdatedAt)
+		&flyMachineID, &flyAppName, &flyVolumeID, &url, &region, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
+	s.FlyMachineID = flyMachineID.String
+	s.FlyAppName = flyAppName.String
+	s.FlyVolumeID = flyVolumeID.String
+	s.URL = url.String
+	s.Region = region.String
 	return &s, nil
 }
 
@@ -68,10 +81,16 @@ func (r *SessionsRepo) List(ctx context.Context, orgID, userID string) ([]models
 	var out []models.Session
 	for rows.Next() {
 		var s models.Session
+		var flyMachineID, flyAppName, flyVolumeID, url, region sql.NullString
 		if err := rows.Scan(&s.ID, &s.OrgID, &s.UserID, &s.TemplateID, &s.Name, &s.Status,
-			&s.FlyMachineID, &s.FlyAppName, &s.FlyVolumeID, &s.URL, &s.Region, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			&flyMachineID, &flyAppName, &flyVolumeID, &url, &region, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan session: %w", err)
 		}
+		s.FlyMachineID = flyMachineID.String
+		s.FlyAppName = flyAppName.String
+		s.FlyVolumeID = flyVolumeID.String
+		s.URL = url.String
+		s.Region = region.String
 		out = append(out, s)
 	}
 	return out, rows.Err()

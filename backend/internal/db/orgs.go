@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -41,11 +42,13 @@ func (r *OrgsRepo) EnsureUser(ctx context.Context, logtoID, email string) (*mode
 		RETURNING id, logto_id, email, created_at
 	`
 	var u models.User
+	var emailNull sql.NullString
 	err := r.ex.QueryRow(ctx, q, id, logtoID, nullable(email)).Scan(
-		&u.ID, &u.LogtoID, &u.Email, &u.CreatedAt)
+		&u.ID, &u.LogtoID, &emailNull, &u.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("ensure user: %w", err)
 	}
+	u.Email = emailNull.String
 	return &u, nil
 }
 

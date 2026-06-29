@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -37,25 +38,31 @@ func (r *TemplatesRepo) Create(ctx context.Context, orgID string, in models.Crea
 		RETURNING id, org_id, name, dockerfile_contents, status, image_ref, fly_app_name, created_at, updated_at
 	`
 	var t models.Template
+	var imageRef, flyAppName sql.NullString
 	err := r.ex.QueryRow(ctx, q, id, orgID, in.Name, in.DockerfileContents).Scan(
-		&t.ID, &t.OrgID, &t.Name, &t.DockerfileContents, &t.Status, &t.ImageRef, &t.FlyAppName, &t.CreatedAt, &t.UpdatedAt)
+		&t.ID, &t.OrgID, &t.Name, &t.DockerfileContents, &t.Status, &imageRef, &flyAppName, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create template: %w", err)
 	}
+	t.ImageRef = imageRef.String
+	t.FlyAppName = flyAppName.String
 	return &t, nil
 }
 
 // Get returns a template by id, scoped to the owning organization.
 func (r *TemplatesRepo) Get(ctx context.Context, orgID, id string) (*models.Template, error) {
 	var t models.Template
+	var imageRef, flyAppName sql.NullString
 	err := r.ex.QueryRow(ctx, `
 		SELECT id, org_id, name, dockerfile_contents, status, image_ref, fly_app_name, created_at, updated_at
 		FROM templates WHERE id = $1 AND org_id = $2
 	`, id, orgID).Scan(
-		&t.ID, &t.OrgID, &t.Name, &t.DockerfileContents, &t.Status, &t.ImageRef, &t.FlyAppName, &t.CreatedAt, &t.UpdatedAt)
+		&t.ID, &t.OrgID, &t.Name, &t.DockerfileContents, &t.Status, &imageRef, &flyAppName, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get template: %w", err)
 	}
+	t.ImageRef = imageRef.String
+	t.FlyAppName = flyAppName.String
 	return &t, nil
 }
 
@@ -73,9 +80,12 @@ func (r *TemplatesRepo) List(ctx context.Context, orgID string) ([]models.Templa
 	var out []models.Template
 	for rows.Next() {
 		var t models.Template
-		if err := rows.Scan(&t.ID, &t.OrgID, &t.Name, &t.DockerfileContents, &t.Status, &t.ImageRef, &t.FlyAppName, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		var imageRef, flyAppName sql.NullString
+		if err := rows.Scan(&t.ID, &t.OrgID, &t.Name, &t.DockerfileContents, &t.Status, &imageRef, &flyAppName, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan template: %w", err)
 		}
+		t.ImageRef = imageRef.String
+		t.FlyAppName = flyAppName.String
 		out = append(out, t)
 	}
 	return out, rows.Err()
