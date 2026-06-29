@@ -32,7 +32,11 @@ type Config struct {
 	// FlyRegion is the default Fly region for new machines/volumes.
 	FlyRegion string
 
-	// LogtoIssuer is the Logto OIDC issuer URL (e.g. https://logto.example.com).
+	// LogtoIssuer is the Logto endpoint origin (e.g. https://logto.example.com),
+	// WITHOUT the /oidc suffix. Logto's OIDC endpoints all live under
+	// <endpoint>/oidc (issuer claim, JWKS, discovery); that suffix is appended
+	// by OIDCIssuer/JWKSURL/OIDCDiscoveryURL so the operator only configures the
+	// bare domain once.
 	LogtoIssuer string
 
 	// LogtoJWKSURL is the full JWKS endpoint. If empty it is derived from the issuer.
@@ -71,7 +75,7 @@ func Load() (Config, error) {
 		FlyAPIBaseURL:        env("FLY_API_BASE_URL", "https://api.machines.dev"),
 		FlyOrg:               os.Getenv("FLY_ORG"),
 		FlyRegion:            env("FLY_REGION", "iad"),
-		LogtoIssuer:          strings.TrimRight(os.Getenv("LOGTO_ISSUER"), "/"),
+		LogtoIssuer:          normalizeLogtoIssuer(os.Getenv("LOGTO_ISSUER")),
 		LogtoJWKSURL:         os.Getenv("LOGTO_JWKS_URL"),
 		LogtoAudience:        os.Getenv("LOGTO_AUDIENCE"),
 		LogtoOrgClaim:        env("LOGTO_ORG_CLAIM", "organization_id"),
@@ -107,18 +111,34 @@ func (c Config) validate() error {
 	return nil
 }
 
+// OIDCIssuer returns the OIDC issuer URL Logto puts in JWT `iss` claims:
+// <endpoint>/oidc. Used to validate tokens (jwt.WithIssuer).
+func (c Config) OIDCIssuer() string {
+	return c.LogtoIssuer + "/oidc"
+}
+
 // JWKSURL returns the JWKS endpoint, deriving it from the issuer when not set
-// explicitly.
+// explicitly. Logto serves JWKS at <endpoint>/oidc/jwks.
 func (c Config) JWKSURL() string {
 	if c.LogtoJWKSURL != "" {
 		return c.LogtoJWKSURL
 	}
-	return c.LogtoIssuer + "/jwks"
+	return c.OIDCIssuer() + "/jwks"
 }
 
-// OIDCDiscoveryURL returns the standard OIDC discovery document URL.
+// OIDCDiscoveryURL returns the standard OIDC discovery document URL. Logto
+// serves it at <endpoint>/oidc/.well-known/openid-configuration.
 func (c Config) OIDCDiscoveryURL() string {
-	return c.LogtoIssuer + "/.well-known/openid-configuration"
+	return c.OIDCIssuer() + "/.well-known/openid-configuration"
+}
+
+// normalizeLogtoIssuer strips a trailing slash and any /oidc suffix so the
+// derived OIDC endpoints (which re-append /oidc) work whether the operator set
+// the bare domain (https://tenant.logto.app) or the full OIDC path.
+func normalizeLogtoIssuer(s string) string {
+	s = strings.TrimRight(s, "/")
+	s = strings.TrimSuffix(s, "/oidc")
+	return strings.TrimRight(s, "/")
 }
 
 func env(key, fallback string) string {
