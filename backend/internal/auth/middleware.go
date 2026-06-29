@@ -11,19 +11,19 @@ import (
 
 // AuthMiddleware intercepts the Authorization header, verifies the Logto JWT,
 // and injects the verified Claims into the request context. Missing or invalid
-// tokens receive a 401. The Logto organization context is extracted but not
+// tokens receive a 401 JSON response. The Logto organization context is extracted but not
 // yet resolved to a database row — that happens in ProvisioningMiddleware.
 func AuthMiddleware(verifier Verifier) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := bearerToken(r)
 			if raw == "" {
-				http.Error(w, "missing bearer token", http.StatusUnauthorized)
+				writeJSONError(w, http.StatusUnauthorized, "missing bearer token")
 				return
 			}
 			claims, err := verifier.Verify(r.Context(), raw)
 			if err != nil {
-				http.Error(w, "invalid token", http.StatusUnauthorized)
+				writeJSONError(w, http.StatusUnauthorized, "invalid token")
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(WithClaims(r.Context(), claims)))
@@ -51,12 +51,12 @@ func ProvisioningMiddleware(orgs Provisioner) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims, ok := ClaimsFromContext(r.Context())
 			if !ok {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
 			identity, err := resolveIdentity(r.Context(), orgs, claims)
 			if err != nil {
-				http.Error(w, "identity provisioning failed", http.StatusInternalServerError)
+				writeJSONError(w, http.StatusInternalServerError, "identity provisioning failed")
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(WithIdentity(r.Context(), identity)))

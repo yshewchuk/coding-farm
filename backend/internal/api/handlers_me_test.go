@@ -27,6 +27,11 @@ func TestMeHandler_NoToken(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rr.Code)
 	}
+	var e errorResponse
+	decode(t, rr, &e)
+	if e.Error == "" {
+		t.Error("expected non-empty error message for missing token")
+	}
 }
 
 func TestMeHandler_BadToken(t *testing.T) {
@@ -34,5 +39,10 @@ func TestMeHandler_BadToken(t *testing.T) {
 	rr := do(t, srv, http.MethodGet, "/api/me", nil, "nope")
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+	var e errorResponse
+	decode(t, rr, &e)
+	if e.Error == "" {
+		t.Error("expected non-empty error message for bad token")
 	}
 }
