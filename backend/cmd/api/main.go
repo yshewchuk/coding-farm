@@ -59,7 +59,7 @@ func run() error {
 	flyClient := fly.NewClient(cfg.FlyAPIBaseURL, "https://api.fly.io", cfg.FlyAPIToken, cfg.FlyOrg, nil)
 
 	// --- Auth (Logto JWKS verifier) ---
-	verifier, err := auth.NewJWKSVerifier(ctx, cfg.JWKSURL(), cfg.LogtoIssuer, cfg.LogtoAudience, cfg.LogtoOrgClaim, cfg.JWKSRefreshInterval)
+	verifier, err := auth.NewJWKSVerifier(ctx, cfg.JWKSURL(), cfg.OIDCIssuer(), cfg.LogtoAudience, cfg.LogtoOrgClaim, cfg.JWKSRefreshInterval)
 	if err != nil {
 		return err
 	}
