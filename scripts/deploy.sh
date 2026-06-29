@@ -74,8 +74,8 @@ preflight() {
   need_cmd fly
   need_cmd jq
   require_env FLY_ORG "your Fly.io org slug (run 'fly orgs list'; create one with 'fly orgs create')"
-  require_env LOGTO_ISSUER "e.g. https://your-tenant.logto.app"
-  validate_origin "$LOGTO_ISSUER"
+  require_env LOGTO_DOMAIN "e.g. https://your-tenant.logto.app"
+  validate_origin "$LOGTO_DOMAIN"
   ensure_database_url
   require_env LOGTO_AUDIENCE "the Logto API resource indicator"
   require_env FRONTEND_URL "the deployed frontend origin, e.g. https://app.example.com"
@@ -217,12 +217,12 @@ logto_m2m_token() {
   require_env LOGTO_M2M_APP_ID "the M2M app id (see 'scripts/deploy.sh logto')"
   require_env LOGTO_M2M_APP_SECRET "the M2M app secret (see 'scripts/deploy.sh logto')"
   local resp token
-  resp="$(curl -sS -X POST "${LOGTO_ISSUER}/oidc/token" \
+  resp="$(curl -sS -X POST "${LOGTO_DOMAIN}/oidc/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     --data-urlencode "grant_type=client_credentials" \
     --data-urlencode "client_id=${LOGTO_M2M_APP_ID}" \
     --data-urlencode "client_secret=${LOGTO_M2M_APP_SECRET}" \
-    --data-urlencode "resource=${LOGTO_ISSUER}/api" \
+    --data-urlencode "resource=${LOGTO_DOMAIN}/api" \
     --data-urlencode "scope=all")"
   token="$(printf '%s' "$resp" | jq -r '.access_token // empty')"
   [ -n "$token" ] || die "could not fetch M2M token from Logto: ${resp}"
@@ -233,7 +233,7 @@ logto_m2m_token() {
 # logto_api METHOD PATH [BODY] -> prints response body; non-zero on HTTP >= 400.
 logto_api() {
   local method="$1" path="$2" body="${3:-}" resp code
-  resp="$(curl -sS -w '\n%{http_code}' -X "$method" "${LOGTO_ISSUER}${path}" \
+  resp="$(curl -sS -w '\n%{http_code}' -X "$method" "${LOGTO_DOMAIN}${path}" \
     -H "Authorization: Bearer ${M2M_TOKEN}" \
     -H "Content-Type: application/json" \
     ${body:+-d "$body"})"
@@ -250,8 +250,8 @@ logto_setup() {
   section "Logto setup (SPA app + API resource)"
   need_cmd curl
   need_cmd jq
-  require_env LOGTO_ISSUER "e.g. https://your-tenant.logto.app"
-  validate_origin "$LOGTO_ISSUER"
+  require_env LOGTO_DOMAIN "e.g. https://your-tenant.logto.app"
+  validate_origin "$LOGTO_DOMAIN"
   require_env LOGTO_AUDIENCE "the API resource indicator, e.g. https://api.example.com"
   require_env FRONTEND_URL "the deployed frontend origin"
   validate_origin "$FRONTEND_URL"
@@ -325,7 +325,7 @@ fly_deploy() {
     DATABASE_URL="$DATABASE_URL" \
     FLY_API_TOKEN="$FLY_API_TOKEN" \
     FLY_ORG="$FLY_ORG" \
-    LOGTO_ISSUER="$LOGTO_ISSUER" \
+    LOGTO_DOMAIN="$LOGTO_DOMAIN" \
     LOGTO_AUDIENCE="$LOGTO_AUDIENCE" \
     FRONTEND_URL="$FRONTEND_URL" \
     >/dev/null
@@ -352,7 +352,7 @@ frontend_build() {
     cd "$ROOT/frontend"
     [ -d node_modules ] || npm install >/dev/null 2>&1
     VITE_API_BASE="$api_url" \
-    VITE_LOGTO_ENDPOINT="$LOGTO_ISSUER" \
+    VITE_LOGTO_ENDPOINT="$LOGTO_DOMAIN" \
     VITE_LOGTO_APP_ID="$LOGTO_APP_ID" \
     VITE_LOGTO_RESOURCE="$LOGTO_AUDIENCE" \
     npm run build
@@ -389,7 +389,7 @@ web_deploy() {
   # time, so the runtime container needs no secrets.
   fly deploy "$ROOT/frontend" --config "$ROOT/frontend/fly.toml" --app "$web_app" --remote-only \
     --build-arg "VITE_API_BASE=$api_url" \
-    --build-arg "VITE_LOGTO_ENDPOINT=$LOGTO_ISSUER" \
+    --build-arg "VITE_LOGTO_ENDPOINT=$LOGTO_DOMAIN" \
     --build-arg "VITE_LOGTO_APP_ID=$LOGTO_APP_ID" \
     --build-arg "VITE_LOGTO_RESOURCE=$LOGTO_AUDIENCE"
 
@@ -418,7 +418,7 @@ Commands:
   help            Show this help
 
 Env (via environment or a .env file at repo root):
-  Required: FLY_ORG, LOGTO_ISSUER, DATABASE_URL,
+  Required: FLY_ORG, LOGTO_DOMAIN, DATABASE_URL,
             LOGTO_AUDIENCE, FRONTEND_URL
   Fly auth: run 'fly auth login' (recommended). Set FLY_API_TOKEN only for
             non-interactive/CI deploys; otherwise it is derived from the
@@ -454,7 +454,7 @@ case "$cmd" in
     ;;
   preflight)    preflight ;;
   neon-create)  neon_create ;;
-  logto)        load_env; require_env LOGTO_ISSUER; require_env FRONTEND_URL; require_env LOGTO_AUDIENCE; logto_checklist ;;
+  logto)        load_env; require_env LOGTO_DOMAIN; require_env FRONTEND_URL; require_env LOGTO_AUDIENCE; logto_checklist ;;
   logto-setup)  load_env; logto_setup ;;
   fly)          preflight; fly_deploy ;;
   web)          preflight; web_deploy ;;

@@ -107,7 +107,7 @@ Required values:
 | `FLY_ORG` | Your Fly.io org slug. |
 | `FLY_API_TOKEN` | A Fly API token (`fly tokens create`). **Optional** for the deploy step — flyctl uses its login; the script derives one from `fly auth token` when unset and sets it as a runtime secret. Set it explicitly for non-interactive/CI redeploys. |
 | `DATABASE_URL` | Neon Postgres connection string. **Leave blank** to let the script create the project via `neonctl`. |
-| `LOGTO_ISSUER` | Logto origin (e.g. `https://your-tenant.logto.app`). |
+| `LOGTO_DOMAIN` | Logto origin (e.g. `https://your-tenant.logto.app`). |
 | `LOGTO_AUDIENCE` | The API resource indicator (audience) the backend validates. |
 | `FRONTEND_URL` | The public origin you'll host the frontend at (e.g. `https://app.example.com`). |
 | `LOGTO_M2M_APP_ID` | M2M app id (one-time console seed; required by `logto-setup`). |

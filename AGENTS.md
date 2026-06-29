@@ -74,7 +74,7 @@ narrative.
 
 ### One-time setup
 - Create a `.env` at the repo root from `.env.example` and fill in `FLY_ORG`,
-  `LOGTO_ISSUER`, `LOGTO_AUDIENCE`, `FRONTEND_URL` (leave `DATABASE_URL` blank
+  `LOGTO_DOMAIN`, `LOGTO_AUDIENCE`, `FRONTEND_URL` (leave `DATABASE_URL` blank
   to auto-create via `neonctl`). `FLY_API_TOKEN` is optional for the deploy
   step (flyctl uses its login); the script derives one from `fly auth token`
   and sets it as a runtime secret. Set it explicitly only for non-interactive/CI.
