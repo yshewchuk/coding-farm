@@ -18,7 +18,8 @@ primary_region = "iad"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false
+  # Scale to zero when idle to save costs (machines wake on request).
+  auto_stop_machines = true
   auto_start_machines = true
   min_machines_running = 0
 
@@ -27,7 +28,6 @@ primary_region = "iad"
     hard_limit = 250
     soft_limit = 200
 
-# Scale-to-one: the control plane itself is cheap to keep warm.
 [[vm]]
   size = "shared-cpu-1x"
   memory = "512mb"
