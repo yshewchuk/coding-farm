@@ -1,38 +1,26 @@
-import { useLogto } from '@logto/react'
+import { useHandleSignInCallback } from '@logto/react'
 import { useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
 import { redirectUri } from '../logto'
 
 // Callback completes the Logto sign-in flow by exchanging the authorization
 // code for tokens, then navigates back to the dashboard.
 //
-// On failure we surface the actual Logto error (code + message + the raw
-// callback URL) instead of silently bouncing to /signin, so a failed exchange
-// — the common case when the baked VITE_LOGTO_RESOURCE doesn't match the
-// registered API resource indicator — is diagnosable rather than looking like
+// We use the dedicated `useHandleSignInCallback` hook (NOT `useLogto()`), which
+// is the correct API: `useLogto()` does NOT expose `handleSignInCallback` —
+// destructuring it yields `undefined` and calling it throws
+// "TypeError: e is not a function". The hook reads the provider context,
+// confirms the browser was redirected from Logto (isSignInRedirected), calls
+// the client's handleSignInCallback with the full href, flips isAuthenticated,
+// and then invokes our completion callback.
+//
+// On failure the hook surfaces its error via the returned `error` (and logs to
+// console), so a failed exchange is diagnosable rather than looking like
 // "nothing happens".
 export default function Callback() {
-  const { handleSignInCallback } = useLogto()
   const navigate = useNavigate()
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      try {
-        // Pass the full href (origin + path + query, and any fragment) so the
-        // SDK can extract code/state regardless of Logto's response mode.
-        await handleSignInCallback(`${window.location.origin}${window.location.pathname}${window.location.search}${window.location.hash}`)
-        if (!cancelled) navigate('/', { replace: true })
-      } catch (e) {
-        if (cancelled) return
-        console.error('logto callback failed', e)
-        setError(e)
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [handleSignInCallback, navigate])
+  const { isLoading, error } = useHandleSignInCallback(() => {
+    navigate('/', { replace: true })
+  })
 
   if (error) {
     const code = error?.code || error?.name || 'unknown'
@@ -62,7 +50,7 @@ export default function Callback() {
     )
   }
 
-  return <div className="loading">Completing sign-in…</div>
+  return <div className="loading">{isLoading ? 'Completing sign-in…' : 'Redirecting…'}</div>
 }
 
 // Friendly hints for the Logto SDK error codes we're most likely to hit.
